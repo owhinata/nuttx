@@ -968,6 +968,45 @@ config LSM6DSL_I2C_FREQUENCY
 	range 1 400000
 	depends on SENSORS_LSM6DSL
 
+config SENSORS_LSM6DSL_UORB
+	bool "STMicro LSM6DSL uORB support"
+	default n
+	select I2C
+	---help---
+		Enable uORB driver for the STMicro LSM6DSL IMU (accel + gyro).
+		Supports interrupt-driven (DRDY) and kthread polling modes.
+
+if SENSORS_LSM6DSL_UORB
+
+config LSM6DSL_UORB_I2C_FREQUENCY
+	int "LSM6DSL uORB I2C frequency"
+	default 400000
+	range 1 400000
+	---help---
+		The I2C frequency used to communicate with the LSM6DSL.
+
+config LSM6DSL_UORB_THREAD_STACKSIZE
+	int "LSM6DSL worker thread stack size"
+	default 1024
+	---help---
+		The stack size for the worker threads that perform measurements.
+
+config LSM6DSL_UORB_ACCEL_BUFSIZE
+	int "LSM6DSL accelerometer uORB buffer size"
+	default 10
+	range 0 500
+	---help---
+		The circular buffer size for accelerometer uORB measurements.
+
+config LSM6DSL_UORB_GYRO_BUFSIZE
+	int "LSM6DSL gyro uORB buffer size"
+	default 10
+	range 0 500
+	---help---
+		The circular buffer size for gyroscope uORB measurements.
+
+endif # SENSORS_LSM6DSL_UORB
+
 config SENSORS_LSM6DSO32
 	bool "LSM6DSO32 support"
 	default n
