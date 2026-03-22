@@ -234,7 +234,7 @@
 #define STM32_IRQ_FPU            (STM32_IRQ_FIRST+81) /* 81: FPU global interrupt */
 
 #if defined(CONFIG_STM32_STM32F427) || defined(CONFIG_STM32_STM32F429) || \
-    defined(CONFIG_STM32_STM32F469)
+    defined(CONFIG_STM32_STM32F469) || defined(CONFIG_STM32_STM32F413)
 #  define STM32_IRQ_UART7        (STM32_IRQ_FIRST+82) /* 82: UART7 interrupt */
 #  define STM32_IRQ_UART8        (STM32_IRQ_FIRST+83) /* 83: UART8 interrupt */
 #elif defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F410)
@@ -272,6 +272,10 @@
 #  define STM32_IRQ_LTDCINT      (STM32_IRQ_FIRST+88) /* 88: LTDCINT interrupt */
 #  define STM32_IRQ_LTDCERRINT   (STM32_IRQ_FIRST+89) /* 89: LTDCERRINT interrupt */
 #  define STM32_IRQ_DMA2D        (STM32_IRQ_FIRST+90) /* 90: DMA2D interrupt */
+#elif defined(CONFIG_STM32_STM32F413)
+#  define STM32_IRQ_UART9        (STM32_IRQ_FIRST+88) /* 88: UART9 interrupt */
+#  define STM32_IRQ_UART10       (STM32_IRQ_FIRST+89) /* 89: UART10 interrupt */
+#  define STM32_IRQ_RESERVED90   (STM32_IRQ_FIRST+90) /* 90: Reserved */
 #elif defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F410)
 #  define STM32_IRQ_RESERVED88   (STM32_IRQ_FIRST+88) /* 88: Reserved */
 #  define STM32_IRQ_RESERVED89   (STM32_IRQ_FIRST+89) /* 89: Reserved */
@@ -317,7 +321,8 @@
 #elif defined(CONFIG_STM32_STM32F429)
 #  define STM32_IRQ_NEXTINT      (91)
 #  define NR_IRQS                (STM32_IRQ_FIRST+91)
-#elif defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F412)
+#elif defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F412) || \
+      defined(CONFIG_STM32_STM32F413)
 #  define STM32_IRQ_NEXTINT      (97)
 #  define NR_IRQS                (STM32_IRQ_FIRST+97)
 #elif defined(CONFIG_STM32_STM32F469)

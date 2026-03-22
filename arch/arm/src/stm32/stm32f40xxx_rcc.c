@@ -627,6 +627,18 @@ static inline void rcc_enableapb2(void)
   regval |= RCC_APB2ENR_USART6EN;
 #endif
 
+#ifdef CONFIG_STM32_UART9
+  /* UART9 clock enable */
+
+  regval |= RCC_APB2ENR_UART9EN;
+#endif
+
+#ifdef CONFIG_STM32_UART10
+  /* UART10 clock enable */
+
+  regval |= RCC_APB2ENR_UART10EN;
+#endif
+
 #ifdef CONFIG_STM32_ADC1
   /* ADC1 clock enable */
 

@@ -505,6 +505,8 @@
 #define RCC_APB2ENR_TIM8EN          (1 << 1)  /* Bit 1:  TIM8 clock enable */
 #define RCC_APB2ENR_USART1EN        (1 << 4)  /* Bit 4:  USART1 clock enable */
 #define RCC_APB2ENR_USART6EN        (1 << 5)  /* Bit 5:  USART6 clock enable */
+#define RCC_APB2ENR_UART9EN         (1 << 6)  /* Bit 6:  UART9 clock enable */
+#define RCC_APB2ENR_UART10EN        (1 << 7)  /* Bit 7:  UART10 clock enable */
 #define RCC_APB2ENR_ADC1EN          (1 << 8)  /* Bit 8:  ADC1 clock enable */
 #define RCC_APB2ENR_ADC2EN          (1 << 9)  /* Bit 9:  ADC2 clock enable */
 #define RCC_APB2ENR_ADC3EN          (1 << 10) /* Bit 10: ADC3 clock enable */

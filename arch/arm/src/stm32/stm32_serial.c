@@ -709,6 +709,22 @@ static char g_uart8rxfifo[RXDMA_BUFFER_SIZE];
 #  endif
 #endif
 
+#ifdef CONFIG_STM32_UART9_SERIALDRIVER
+static char g_uart9rxbuffer[CONFIG_UART9_RXBUFSIZE];
+static char g_uart9txbuffer[CONFIG_UART9_TXBUFSIZE];
+#  ifdef CONFIG_UART9_RXDMA
+static char g_uart9rxfifo[RXDMA_BUFFER_SIZE];
+#  endif
+#endif
+
+#ifdef CONFIG_STM32_UART10_SERIALDRIVER
+static char g_uart10rxbuffer[CONFIG_UART10_RXBUFSIZE];
+static char g_uart10txbuffer[CONFIG_UART10_TXBUFSIZE];
+#  ifdef CONFIG_UART10_RXDMA
+static char g_uart10rxfifo[RXDMA_BUFFER_SIZE];
+#  endif
+#endif
+
 #ifdef CONFIG_STM32_LPUART1_SERIALDRIVER
 static char g_lpuart1rxbuffer[CONFIG_LPUART1_RXBUFSIZE];
 static char g_lpuart1txbuffer[CONFIG_LPUART1_TXBUFSIZE];
@@ -1281,6 +1297,146 @@ static struct up_dev_s g_uart8priv =
 };
 #endif
 
+/* This describes the state of the STM32 UART9 port. */
+
+#ifdef CONFIG_STM32_UART9_SERIALDRIVER
+static struct up_dev_s g_uart9priv =
+{
+  .dev =
+    {
+#  if CONSOLE_UART == 9
+      .isconsole = true,
+#  endif
+      .recv     =
+      {
+        .size   = CONFIG_UART9_RXBUFSIZE,
+        .buffer = g_uart9rxbuffer,
+      },
+      .xmit     =
+      {
+        .size   = CONFIG_UART9_TXBUFSIZE,
+        .buffer = g_uart9txbuffer,
+      },
+#  if defined(CONFIG_UART9_RXDMA) && defined(CONFIG_UART9_TXDMA)
+      .ops       = &g_uart_rxtxdma_ops,
+#  elif defined(CONFIG_UART9_RXDMA) && !defined(CONFIG_UART9_TXDMA)
+      .ops       = &g_uart_rxdma_ops,
+#  elif !defined(CONFIG_UART9_RXDMA) && defined(CONFIG_UART9_TXDMA)
+      .ops       = &g_uart_txdma_ops,
+#  else
+      .ops       = &g_uart_ops,
+#  endif
+      .priv     = &g_uart9priv,
+    },
+
+  .islpuart       = false,
+  .irq            = STM32_IRQ_UART9,
+  .parity         = CONFIG_UART9_PARITY,
+  .bits           = CONFIG_UART9_BITS,
+  .stopbits2      = CONFIG_UART9_2STOP,
+  .baud           = CONFIG_UART9_BAUD,
+  .apbclock       = STM32_PCLK2_FREQUENCY,
+  .usartbase      = STM32_UART9_BASE,
+  .tx_gpio        = GPIO_UART9_TX,
+  .rx_gpio        = GPIO_UART9_RX,
+#  if defined(CONFIG_SERIAL_OFLOWCONTROL) && defined(CONFIG_UART9_OFLOWCONTROL)
+  .oflow          = true,
+  .cts_gpio       = GPIO_UART9_CTS,
+#  endif
+#  if defined(CONFIG_SERIAL_IFLOWCONTROL) && defined(CONFIG_UART9_IFLOWCONTROL)
+  .iflow          = true,
+  .rts_gpio       = GPIO_UART9_RTS,
+#  endif
+#  ifdef CONFIG_UART9_TXDMA
+  .txdma_channel = DMAMAP_UART9_TX,
+#  endif
+#  ifdef CONFIG_UART9_RXDMA
+  .rxdma_channel = DMAMAP_UART9_RX,
+  .rxfifo        = g_uart9rxfifo,
+#  endif
+
+#  ifdef CONFIG_UART9_RS485
+  .rs485_dir_gpio = GPIO_UART9_RS485_DIR,
+#    if (CONFIG_UART9_RS485_DIR_POLARITY == 0)
+  .rs485_dir_polarity = false,
+#    else
+  .rs485_dir_polarity = true,
+#    endif
+#  endif
+  .lock = SP_UNLOCKED,
+};
+#endif
+
+/* This describes the state of the STM32 UART10 port. */
+
+#ifdef CONFIG_STM32_UART10_SERIALDRIVER
+static struct up_dev_s g_uart10priv =
+{
+  .dev =
+    {
+#  if CONSOLE_UART == 10
+      .isconsole = true,
+#  endif
+      .recv     =
+      {
+        .size   = CONFIG_UART10_RXBUFSIZE,
+        .buffer = g_uart10rxbuffer,
+      },
+      .xmit     =
+      {
+        .size   = CONFIG_UART10_TXBUFSIZE,
+        .buffer = g_uart10txbuffer,
+      },
+#  if defined(CONFIG_UART10_RXDMA) && defined(CONFIG_UART10_TXDMA)
+      .ops       = &g_uart_rxtxdma_ops,
+#  elif defined(CONFIG_UART10_RXDMA) && !defined(CONFIG_UART10_TXDMA)
+      .ops       = &g_uart_rxdma_ops,
+#  elif !defined(CONFIG_UART10_RXDMA) && defined(CONFIG_UART10_TXDMA)
+      .ops       = &g_uart_txdma_ops,
+#  else
+      .ops       = &g_uart_ops,
+#  endif
+      .priv     = &g_uart10priv,
+    },
+
+  .islpuart       = false,
+  .irq            = STM32_IRQ_UART10,
+  .parity         = CONFIG_UART10_PARITY,
+  .bits           = CONFIG_UART10_BITS,
+  .stopbits2      = CONFIG_UART10_2STOP,
+  .baud           = CONFIG_UART10_BAUD,
+  .apbclock       = STM32_PCLK2_FREQUENCY,
+  .usartbase      = STM32_UART10_BASE,
+  .tx_gpio        = GPIO_UART10_TX,
+  .rx_gpio        = GPIO_UART10_RX,
+#  if defined(CONFIG_SERIAL_OFLOWCONTROL) && defined(CONFIG_UART10_OFLOWCONTROL)
+  .oflow          = true,
+  .cts_gpio       = GPIO_UART10_CTS,
+#  endif
+#  if defined(CONFIG_SERIAL_IFLOWCONTROL) && defined(CONFIG_UART10_IFLOWCONTROL)
+  .iflow          = true,
+  .rts_gpio       = GPIO_UART10_RTS,
+#  endif
+#  ifdef CONFIG_UART10_TXDMA
+  .txdma_channel = DMAMAP_UART10_TX,
+#  endif
+#  ifdef CONFIG_UART10_RXDMA
+  .rxdma_channel = DMAMAP_UART10_RX,
+  .rxfifo        = g_uart10rxfifo,
+#  endif
+
+#  ifdef CONFIG_UART10_RS485
+  .rs485_dir_gpio = GPIO_UART10_RS485_DIR,
+#    if (CONFIG_UART10_RS485_DIR_POLARITY == 0)
+  .rs485_dir_polarity = false,
+#    else
+  .rs485_dir_polarity = true,
+#    endif
+#  endif
+  .lock = SP_UNLOCKED,
+};
+#endif
+
 /* This describes the state of the STM32 LPUART1 ports. */
 #ifdef CONFIG_STM32_LPUART1_SERIALDRIVER
 static struct up_dev_s g_lpuart1priv =
@@ -1377,6 +1533,12 @@ static struct up_dev_s * const g_uart_devs[STM32_NUSART] =
 #endif
 #ifdef CONFIG_STM32_UART8_SERIALDRIVER
   [7] = &g_uart8priv,
+#endif
+#ifdef CONFIG_STM32_UART9_SERIALDRIVER
+  [8] = &g_uart9priv,
+#endif
+#ifdef CONFIG_STM32_UART10_SERIALDRIVER
+  [9] = &g_uart10priv,
 #endif
 };
 
@@ -1910,6 +2072,18 @@ static void up_set_apb_clock(struct uart_dev_s *dev, bool on)
     case STM32_UART8_BASE:
       rcc_en = RCC_APB1ENR_UART8EN;
       regaddr = STM32_RCC_APB1ENR;
+      break;
+#endif
+#ifdef CONFIG_STM32_UART9_SERIALDRIVER
+    case STM32_UART9_BASE:
+      rcc_en = RCC_APB2ENR_UART9EN;
+      regaddr = STM32_RCC_APB2ENR;
+      break;
+#endif
+#ifdef CONFIG_STM32_UART10_SERIALDRIVER
+    case STM32_UART10_BASE:
+      rcc_en = RCC_APB2ENR_UART10EN;
+      regaddr = STM32_RCC_APB2ENR;
       break;
 #endif
 #ifdef CONFIG_STM32_LPUART1_SERIALDRIVER
@@ -3666,6 +3840,20 @@ void stm32_serial_dma_poll(void)
   if (g_uart8priv.rxdma != NULL)
     {
       up_dma_rxcallback(g_uart8priv.rxdma, 0, &g_uart8priv);
+    }
+#endif
+
+#ifdef CONFIG_UART9_RXDMA
+  if (g_uart9priv.rxdma != NULL)
+    {
+      up_dma_rxcallback(g_uart9priv.rxdma, 0, &g_uart9priv);
+    }
+#endif
+
+#ifdef CONFIG_UART10_RXDMA
+  if (g_uart10priv.rxdma != NULL)
+    {
+      up_dma_rxcallback(g_uart10priv.rxdma, 0, &g_uart10priv);
     }
 #endif
 
