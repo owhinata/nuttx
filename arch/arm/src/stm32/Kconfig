@@ -1016,6 +1016,16 @@ config ARCH_CHIP_STM32F412ZG
 	select STM32_STM32F4XXX
 	select STM32_STM32F412
 
+config ARCH_CHIP_STM32F413VG
+	bool "STM32F413VG"
+	select STM32_STM32F4XXX
+	select STM32_STM32F413
+
+config ARCH_CHIP_STM32F413ZH
+	bool "STM32F413ZH"
+	select STM32_STM32F4XXX
+	select STM32_STM32F413
+
 config ARCH_CHIP_STM32F405RG
 	bool "STM32F405RG"
 	select STM32_STM32F4XXX
@@ -1699,6 +1709,47 @@ config STM32_STM32F412
 	select STM32_HAVE_OTGFS
 	select STM32_HAVE_I2SPLL
 
+config STM32_STM32F413
+	bool
+	default n
+	select STM32_HAVE_TIM1
+	select STM32_HAVE_TIM2
+	select STM32_HAVE_TIM3
+	select STM32_HAVE_TIM4
+	select STM32_HAVE_TIM5
+	select STM32_HAVE_TIM6
+	select STM32_HAVE_TIM7
+	select STM32_HAVE_TIM8
+	select STM32_HAVE_TIM9
+	select STM32_HAVE_TIM10
+	select STM32_HAVE_TIM11
+	select STM32_HAVE_TIM12
+	select STM32_HAVE_TIM13
+	select STM32_HAVE_TIM14
+	select STM32_HAVE_USART1
+	select STM32_HAVE_USART2
+	select STM32_HAVE_USART3
+	select STM32_HAVE_USART6
+	select STM32_HAVE_UART4
+	select STM32_HAVE_UART5
+	select STM32_HAVE_UART7
+	select STM32_HAVE_UART8
+	select STM32_HAVE_UART9
+	select STM32_HAVE_UART10
+	select STM32_HAVE_I2C1
+	select STM32_HAVE_I2C2
+	select STM32_HAVE_I2C3
+	select STM32_HAVE_SPI1
+	select STM32_HAVE_SPI2
+	select STM32_HAVE_SPI3
+	select STM32_HAVE_SPI4
+	select STM32_HAVE_SPI5
+	select STM32_HAVE_CAN1
+	select STM32_HAVE_CAN2
+	select STM32_HAVE_CAN3
+	select STM32_HAVE_OTGFS
+	select STM32_HAVE_I2SPLL
+
 config STM32_STM32F405
 	bool
 	default n
@@ -2283,6 +2334,14 @@ config STM32_HAVE_UART8
 	bool
 	default n
 
+config STM32_HAVE_UART9
+	bool
+	default n
+
+config STM32_HAVE_UART10
+	bool
+	default n
+
 config STM32_HAVE_TIM1
 	bool
 	default n
@@ -2436,6 +2495,10 @@ config STM32_HAVE_CAN1
 	default n
 
 config STM32_HAVE_CAN2
+	bool
+	default n
+
+config STM32_HAVE_CAN3
 	bool
 	default n
 
@@ -3343,6 +3406,18 @@ config STM32_UART8
 	bool "UART8"
 	default n
 	depends on STM32_HAVE_UART8
+	select STM32_USART
+
+config STM32_UART9
+	bool "UART9"
+	default n
+	depends on STM32_HAVE_UART9
+	select STM32_USART
+
+config STM32_UART10
+	bool "UART10"
+	default n
+	depends on STM32_HAVE_UART10
 	select STM32_USART
 
 config STM32_USB
