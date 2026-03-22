@@ -135,6 +135,10 @@ ifeq ($(CONFIG_SENSORS_LSM6DSL),y)
   CSRCS += lsm6dsl.c
 endif
 
+ifeq ($(CONFIG_SENSORS_LSM6DSL_UORB),y)
+  CSRCS += lsm6dsl_uorb.c
+endif
+
 ifeq ($(CONFIG_SENSORS_LSM6DSO32),y)
   CSRCS += lsm6dso32_uorb.c
 endif
