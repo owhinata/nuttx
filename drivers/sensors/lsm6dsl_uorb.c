@@ -2,8 +2,8 @@
  * drivers/sensors/lsm6dsl_uorb.c
  *
  * LSM6DSL IMU uORB driver — accelerometer + gyroscope.
- * Supports interrupt-driven (DRDY) and kthread polling modes.
- * Based on lsm6dso32_uorb.c by Carleton University InSpace.
+ * Single DRDY interrupt on INT1 reads both accel and gyro in one burst,
+ * following the pybricks LSM6DS3TR-C pattern.
  *
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -48,60 +48,38 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* WHO_AM_I value for LSM6DSL */
+#define WHO_AM_I_VAL    0x6a
 
-#define WHO_AM_I_VAL 0x6a
+#define MILLIG_TO_MS2   (0.0098067f)
+#define MDPS_TO_RADS    (3.141592653f / (180.0f * 1000.0f))
 
-/* Convert milli-g to m/s^2 */
+/* Registers */
 
-#define MILLIG_TO_MS2 (0.0098067f)
+#define DRDY_PULSE_CFG  0x0b   /* DRDY pulsed/latched config */
+#define INT1_CTRL       0x0d   /* INT1 pin control */
+#define WHO_AM_I        0x0f
+#define CTRL1_XL        0x10   /* Accel control */
+#define CTRL2_G         0x11   /* Gyro control */
+#define CTRL3_C         0x12   /* Control reg 3 (BDU, IF_INC, etc.) */
+#define CTRL5_C         0x14   /* Control reg 5 (rounding) */
+#define STATUS_REG      0x1e
+#define OUTX_L_G        0x22   /* Gyro output start (12 bytes: G+XL) */
 
-/* Convert milli-dps to rad/s */
+/* Bits */
 
-#define MDPS_TO_RADS (3.141592653f / (180.0f * 1000.0f))
+#define BIT_BDU         (1 << 6)  /* Block Data Update in CTRL3_C */
+#define BIT_IF_INC      (1 << 2)  /* Auto-increment in CTRL3_C */
+#define ROUNDING_GY_XL  (3 << 2)  /* Rounding for gyro+accel in CTRL5_C */
+#define BIT_DRDY_PULSED (1 << 7)  /* Pulsed DRDY mode */
+#define BIT_INT1_DRDY_G (1 << 1)  /* Gyro DRDY on INT1 */
 
-/* Registers (LSM6DSL) */
+/* Burst read: 6 bytes gyro (0x22-0x27) + 6 bytes accel (0x28-0x2D) */
 
-#define WHO_AM_I    0x0f
-#define CTRL1_XL    0x10   /* Accel control reg */
-#define CTRL2_G     0x11   /* Gyro control reg */
-#define CTRL3_C     0x12   /* Control reg 3 */
-#define CTRL4_C     0x13   /* Control reg 4 */
-#define CTRL5_C     0x14   /* Control reg 5 */
-#define CTRL6_C     0x15   /* Control reg 6 */
-#define CTRL7_G     0x16   /* Control reg 7 */
-#define CTRL8_XL    0x17   /* Control reg 8 */
-#define CTRL9_XL    0x18   /* Control reg 9 */
-#define CTRL10_C    0x19   /* Control reg 10 */
-#define INT1_CTRL   0x0d   /* INT1 pin control */
-#define INT2_CTRL   0x0e   /* INT2 pin control */
-#define STATUS_REG  0x1e   /* Status register */
-#define OUT_TEMP_L  0x20   /* Temperature low byte */
-#define OUT_TEMP_H  0x21   /* Temperature high byte */
-#define OUTX_L_G    0x22   /* Gyro X low byte */
-#define OUTX_H_G    0x23
-#define OUTY_L_G    0x24
-#define OUTY_H_G    0x25
-#define OUTZ_L_G    0x26
-#define OUTZ_H_G    0x27
-#define OUTX_L_A    0x28   /* Accel X low byte */
-#define OUTX_H_A    0x29
-#define OUTY_L_A    0x2a
-#define OUTY_H_A    0x2b
-#define OUTZ_L_A    0x2c
-#define OUTZ_H_A    0x2d
-
-/* Status bits */
-
-#define BIT_STATUS_XLDA (1 << 0)  /* Accel data ready */
-#define BIT_STATUS_GDA  (1 << 1)  /* Gyro data ready */
-#define BIT_STATUS_TDA  (1 << 2)  /* Temp data ready */
+#define BURST_DATA_LEN  12
 
 /****************************************************************************
  * Private Types
  ****************************************************************************/
-
-/* ODR settings (same encoding as LSM6DSO32) */
 
 enum lsm6dsl_odr_e
 {
@@ -118,51 +96,37 @@ enum lsm6dsl_odr_e
   ODR_6660HZ  = 0xa,
 };
 
-/* Gyroscope FSR settings */
-
 enum lsm6dsl_fsr_gy_e
 {
-  FSR_GY_250DPS  = 0x0,  /* +-250 dps */
-  FSR_GY_125DPS  = 0x1,  /* +-125 dps */
-  FSR_GY_500DPS  = 0x2,  /* +-500 dps */
-  FSR_GY_1000DPS = 0x4,  /* +-1000 dps */
-  FSR_GY_2000DPS = 0x6,  /* +-2000 dps */
+  FSR_GY_250DPS  = 0x0,
+  FSR_GY_125DPS  = 0x1,
+  FSR_GY_500DPS  = 0x2,
+  FSR_GY_1000DPS = 0x4,
+  FSR_GY_2000DPS = 0x6,
 };
-
-/* Accelerometer FSR settings (LSM6DSL: 2/4/8/16g, differs from LSM6DSO32) */
 
 enum lsm6dsl_fsr_xl_e
 {
-  FSR_XL_2G  = 0x0,  /* +-2g */
-  FSR_XL_16G = 0x1,  /* +-16g */
-  FSR_XL_4G  = 0x2,  /* +-4g */
-  FSR_XL_8G  = 0x3,  /* +-8g */
+  FSR_XL_2G  = 0x0,
+  FSR_XL_16G = 0x1,
+  FSR_XL_4G  = 0x2,
+  FSR_XL_8G  = 0x3,
 };
-
-/* Lower-half sensor instance */
-
-struct lsm6dsl_sens_s
-{
-  struct sensor_lowerhalf_s lower;
-  FAR struct lsm6dsl_dev_s *dev;
-  bool enabled;
-  enum lsm6dsl_odr_e odr;
-  int fsr;
-  sem_t run;
-  enum lsm6dsl_int_e intpin;
-  bool interrupts;
-  struct work_s work;
-};
-
-/* Device instance */
 
 struct lsm6dsl_dev_s
 {
-  struct lsm6dsl_sens_s gyro;
-  struct lsm6dsl_sens_s accel;
+  struct sensor_lowerhalf_s gyro_lower;
+  struct sensor_lowerhalf_s accel_lower;
   FAR struct i2c_master_s *i2c;
   uint8_t addr;
   mutex_t devlock;
+  sem_t run;                   /* Polling thread wakeup */
+  struct work_s work;          /* HPWORK for interrupt mode */
+  enum lsm6dsl_odr_e odr;     /* Shared ODR for both sensors */
+  int fsr_gy;
+  int fsr_xl;
+  bool gyro_enabled;
+  bool accel_enabled;
 };
 
 /****************************************************************************
@@ -185,8 +149,6 @@ static int lsm6dsl_get_info(FAR struct sensor_lowerhalf_s *lower,
  * Private Data
  ****************************************************************************/
 
-/* ODR to microsecond intervals */
-
 static const uint32_t g_odr_interval[] =
 {
   0,       /* ODR_OFF */
@@ -202,8 +164,6 @@ static const uint32_t g_odr_interval[] =
   150,     /* ODR_6660HZ */
 };
 
-/* Accel FSR sensitivities in m/s^2 per LSB (LSM6DSL datasheet Table 2) */
-
 static const float g_fsr_xl_sens[] =
 {
   0.061f * MILLIG_TO_MS2,  /* 2g */
@@ -211,8 +171,6 @@ static const float g_fsr_xl_sens[] =
   0.122f * MILLIG_TO_MS2,  /* 4g */
   0.244f * MILLIG_TO_MS2,  /* 8g */
 };
-
-/* Gyro FSR sensitivities in rad/s per LSB (LSM6DSL datasheet Table 3) */
 
 static const float g_fsr_gy_sens[] =
 {
@@ -225,108 +183,79 @@ static const float g_fsr_gy_sens[] =
   70.0f * MDPS_TO_RADS,    /* 2000 dps */
 };
 
-/* Interrupt control registers */
-
-static const uint8_t g_int_ctrl[] =
-{
-  INT1_CTRL,  /* INT1 */
-  INT2_CTRL,  /* INT2 */
-};
-
-/* Sensor operations */
-
 static const struct sensor_ops_s g_sensor_ops =
 {
-  .fetch          = NULL,
-  .activate       = lsm6dsl_activate,
-  .control        = lsm6dsl_control,
-  .set_interval   = lsm6dsl_set_interval,
-  .selftest       = NULL,
-  .set_calibvalue = NULL,
-  .calibrate      = NULL,
-  .get_info       = lsm6dsl_get_info,
+  .activate     = lsm6dsl_activate,
+  .set_interval = lsm6dsl_set_interval,
+  .control      = lsm6dsl_control,
+  .get_info     = lsm6dsl_get_info,
 };
 
 /****************************************************************************
- * Private Functions
+ * Private Functions — I2C helpers
  ****************************************************************************/
 
-/****************************************************************************
- * Name: lsm6dsl_write_bytes
- ****************************************************************************/
-
-static int lsm6dsl_write_bytes(FAR struct lsm6dsl_dev_s *priv,
-                                uint8_t addr, FAR void *buf, size_t nbytes)
+static int lsm6dsl_write_byte(FAR struct lsm6dsl_dev_s *priv,
+                               uint8_t reg, uint8_t val)
 {
-  struct i2c_msg_s cmd[2];
+  uint8_t buf[2] = { reg, val };
+  struct i2c_msg_s msg;
 
-  cmd[0].frequency = CONFIG_LSM6DSL_UORB_I2C_FREQUENCY;
-  cmd[0].addr      = priv->addr;
-  cmd[0].flags     = I2C_M_NOSTOP;
-  cmd[0].buffer    = &addr;
-  cmd[0].length    = sizeof(addr);
+  msg.frequency = CONFIG_LSM6DSL_UORB_I2C_FREQUENCY;
+  msg.addr      = priv->addr;
+  msg.flags     = 0;
+  msg.buffer    = buf;
+  msg.length    = 2;
 
-  cmd[1].frequency = CONFIG_LSM6DSL_UORB_I2C_FREQUENCY;
-  cmd[1].addr      = priv->addr;
-  cmd[1].flags     = I2C_M_NOSTART;
-  cmd[1].buffer    = buf;
-  cmd[1].length    = nbytes;
-
-  return I2C_TRANSFER(priv->i2c, cmd, 2);
+  return I2C_TRANSFER(priv->i2c, &msg, 1);
 }
 
-/****************************************************************************
- * Name: lsm6dsl_read_bytes
- ****************************************************************************/
-
 static int lsm6dsl_read_bytes(FAR struct lsm6dsl_dev_s *priv,
-                               uint8_t addr, FAR void *buf, size_t nbytes)
+                               uint8_t reg, FAR void *buf, size_t len)
 {
   struct i2c_msg_s cmd[2];
 
   cmd[0].frequency = CONFIG_LSM6DSL_UORB_I2C_FREQUENCY;
   cmd[0].addr      = priv->addr;
   cmd[0].flags     = I2C_M_NOSTOP;
-  cmd[0].buffer    = &addr;
-  cmd[0].length    = sizeof(addr);
+  cmd[0].buffer    = &reg;
+  cmd[0].length    = 1;
 
   cmd[1].frequency = CONFIG_LSM6DSL_UORB_I2C_FREQUENCY;
   cmd[1].addr      = priv->addr;
   cmd[1].flags     = I2C_M_READ;
   cmd[1].buffer    = buf;
-  cmd[1].length    = nbytes;
+  cmd[1].length    = len;
 
   return I2C_TRANSFER(priv->i2c, cmd, 2);
 }
 
-/****************************************************************************
- * Name: lsm6dsl_set_bits
- ****************************************************************************/
-
-static int lsm6dsl_set_bits(FAR struct lsm6dsl_dev_s *priv, uint8_t addr,
-                             uint8_t set_bits, uint8_t clear_bits)
+static int lsm6dsl_set_bits(FAR struct lsm6dsl_dev_s *priv, uint8_t reg,
+                             uint8_t set, uint8_t clear)
 {
   int err;
-  uint8_t reg;
+  uint8_t val;
 
-  err = lsm6dsl_read_bytes(priv, addr, &reg, sizeof(reg));
+  err = lsm6dsl_read_bytes(priv, reg, &val, 1);
   if (err < 0)
     {
       return err;
     }
 
-  reg = (reg & ~clear_bits) | set_bits;
-  return lsm6dsl_write_bytes(priv, addr, &reg, sizeof(reg));
+  val = (val & ~clear) | set;
+  return lsm6dsl_write_byte(priv, reg, val);
 }
 
 /****************************************************************************
- * Name: accel_set_odr
+ * Private Functions — ODR / FSR
  ****************************************************************************/
 
-static int accel_set_odr(FAR struct lsm6dsl_dev_s *dev,
-                          enum lsm6dsl_odr_e odr)
+static int lsm6dsl_set_odr(FAR struct lsm6dsl_dev_s *dev,
+                             enum lsm6dsl_odr_e odr)
 {
   int err;
+
+  /* Set both accel and gyro to the same ODR */
 
   err = lsm6dsl_set_bits(dev, CTRL1_XL, (odr & 0xf) << 4, 0xf0);
   if (err < 0)
@@ -334,32 +263,15 @@ static int accel_set_odr(FAR struct lsm6dsl_dev_s *dev,
       return err;
     }
 
-  dev->accel.odr = odr;
-  return err;
-}
-
-/****************************************************************************
- * Name: gyro_set_odr
- ****************************************************************************/
-
-static int gyro_set_odr(FAR struct lsm6dsl_dev_s *dev,
-                         enum lsm6dsl_odr_e odr)
-{
-  int err;
-
-  err = lsm6dsl_set_bits(dev, CTRL2_G, (odr & 0x0f) << 4, 0xf0);
+  err = lsm6dsl_set_bits(dev, CTRL2_G, (odr & 0xf) << 4, 0xf0);
   if (err < 0)
     {
       return err;
     }
 
-  dev->gyro.odr = odr;
-  return err;
+  dev->odr = odr;
+  return OK;
 }
-
-/****************************************************************************
- * Name: accel_set_fsr
- ****************************************************************************/
 
 static int accel_set_fsr(FAR struct lsm6dsl_dev_s *dev,
                           enum lsm6dsl_fsr_xl_e fsr)
@@ -372,13 +284,9 @@ static int accel_set_fsr(FAR struct lsm6dsl_dev_s *dev,
       return err;
     }
 
-  dev->accel.fsr = fsr;
-  return err;
+  dev->fsr_xl = fsr;
+  return OK;
 }
-
-/****************************************************************************
- * Name: gyro_set_fsr
- ****************************************************************************/
 
 static int gyro_set_fsr(FAR struct lsm6dsl_dev_s *dev,
                          enum lsm6dsl_fsr_gy_e fsr)
@@ -391,122 +299,21 @@ static int gyro_set_fsr(FAR struct lsm6dsl_dev_s *dev,
       return err;
     }
 
-  dev->gyro.fsr = fsr;
-  return err;
+  dev->fsr_gy = fsr;
+  return OK;
 }
 
 /****************************************************************************
- * Name: gyro_int_enable / accel_int_enable
+ * Private Functions — Data acquisition
  ****************************************************************************/
 
-static int gyro_int_enable(FAR struct lsm6dsl_dev_s *dev, bool enable)
+static int push_data(FAR struct lsm6dsl_dev_s *dev)
 {
+  int16_t raw[6];  /* gyro XYZ + accel XYZ */
+  struct sensor_gyro gyro;
+  struct sensor_accel accel;
+  uint64_t ts;
   int err;
-  uint8_t enable_bits  = enable ? 0x02 : 0x00;  /* DRDY_G bit */
-  uint8_t disable_bits = enable ? 0x00 : 0x02;
-
-  err = lsm6dsl_set_bits(dev, g_int_ctrl[dev->gyro.intpin],
-                          enable_bits, disable_bits);
-  if (err < 0)
-    {
-      return err;
-    }
-
-  dev->gyro.interrupts = enable;
-  return err;
-}
-
-static int accel_int_enable(FAR struct lsm6dsl_dev_s *dev, bool enable)
-{
-  int err;
-  uint8_t enable_bits  = enable ? 0x01 : 0x00;  /* DRDY_XL bit */
-  uint8_t disable_bits = enable ? 0x00 : 0x01;
-
-  err = lsm6dsl_set_bits(dev, g_int_ctrl[dev->accel.intpin],
-                          enable_bits, disable_bits);
-  if (err < 0)
-    {
-      return err;
-    }
-
-  dev->accel.interrupts = enable;
-  return err;
-}
-
-/****************************************************************************
- * Name: lsm6dsl_convert_temp
- ****************************************************************************/
-
-static float lsm6dsl_convert_temp(int16_t temp)
-{
-  return (float)((temp / 256) + 25);
-}
-
-/****************************************************************************
- * Name: lsm6dsl_read_gyro
- ****************************************************************************/
-
-static int lsm6dsl_read_gyro(FAR struct lsm6dsl_dev_s *dev,
-                              FAR struct sensor_gyro *data)
-{
-  int16_t raw[4];  /* temp + 3x gyro */
-  int err;
-
-  err = lsm6dsl_read_bytes(dev, OUT_TEMP_L, raw, sizeof(raw));
-  if (err < 0)
-    {
-      return err;
-    }
-
-  data->timestamp   = sensor_get_timestamp();
-  data->temperature = lsm6dsl_convert_temp(raw[0]);
-  data->x = (float)(raw[1]) * g_fsr_gy_sens[dev->gyro.fsr];
-  data->y = (float)(raw[2]) * g_fsr_gy_sens[dev->gyro.fsr];
-  data->z = (float)(raw[3]) * g_fsr_gy_sens[dev->gyro.fsr];
-
-  return err;
-}
-
-/****************************************************************************
- * Name: lsm6dsl_read_accel
- ****************************************************************************/
-
-static int lsm6dsl_read_accel(FAR struct lsm6dsl_dev_s *dev,
-                               FAR struct sensor_accel *data)
-{
-  int16_t raw[3];
-  int16_t raw_temp;
-  int err;
-
-  err = lsm6dsl_read_bytes(dev, OUTX_L_A, raw, sizeof(raw));
-  if (err < 0)
-    {
-      return err;
-    }
-
-  err = lsm6dsl_read_bytes(dev, OUT_TEMP_L, &raw_temp, sizeof(raw_temp));
-  if (err < 0)
-    {
-      return err;
-    }
-
-  data->timestamp   = sensor_get_timestamp();
-  data->temperature = lsm6dsl_convert_temp(raw_temp);
-  data->x = (float)(raw[0]) * g_fsr_xl_sens[dev->accel.fsr];
-  data->y = (float)(raw[1]) * g_fsr_xl_sens[dev->accel.fsr];
-  data->z = (float)(raw[2]) * g_fsr_xl_sens[dev->accel.fsr];
-
-  return err;
-}
-
-/****************************************************************************
- * Name: push_gyro / push_accel
- ****************************************************************************/
-
-static int push_gyro(FAR struct lsm6dsl_dev_s *dev)
-{
-  int err;
-  struct sensor_gyro data;
 
   err = nxmutex_lock(&dev->devlock);
   if (err < 0)
@@ -514,167 +321,109 @@ static int push_gyro(FAR struct lsm6dsl_dev_s *dev)
       return err;
     }
 
-  err = lsm6dsl_read_gyro(dev, &data);
+  /* Burst read: 12 bytes from OUTX_L_G (0x22)
+   * [0..2] = gyro X,Y,Z   [3..5] = accel X,Y,Z
+   */
+
+  err = lsm6dsl_read_bytes(dev, OUTX_L_G, raw, BURST_DATA_LEN);
   if (err < 0)
     {
-      goto early_ret;
+      goto unlock;
     }
 
-  dev->gyro.lower.push_event(dev->gyro.lower.priv, &data, sizeof(data));
+  ts = sensor_get_timestamp();
 
-early_ret:
+  gyro.timestamp   = ts;
+  gyro.temperature = 0;
+  gyro.x = (float)(raw[0]) * g_fsr_gy_sens[dev->fsr_gy];
+  gyro.y = (float)(raw[1]) * g_fsr_gy_sens[dev->fsr_gy];
+  gyro.z = (float)(raw[2]) * g_fsr_gy_sens[dev->fsr_gy];
+
+  accel.timestamp   = ts;
+  accel.temperature = 0;
+  accel.x = (float)(raw[3]) * g_fsr_xl_sens[dev->fsr_xl];
+  accel.y = (float)(raw[4]) * g_fsr_xl_sens[dev->fsr_xl];
+  accel.z = (float)(raw[5]) * g_fsr_xl_sens[dev->fsr_xl];
+
+  if (dev->gyro_enabled)
+    {
+      dev->gyro_lower.push_event(dev->gyro_lower.priv,
+                                 &gyro, sizeof(gyro));
+    }
+
+  if (dev->accel_enabled)
+    {
+      dev->accel_lower.push_event(dev->accel_lower.priv,
+                                  &accel, sizeof(accel));
+    }
+
+unlock:
   nxmutex_unlock(&dev->devlock);
   return err;
 }
 
-static int push_accel(FAR struct lsm6dsl_dev_s *dev)
+/****************************************************************************
+ * Private Functions — Interrupt handler
+ ****************************************************************************/
+
+static void drdy_worker(FAR void *arg)
 {
-  int err;
-  struct sensor_accel data;
+  push_data(arg);
+}
 
-  err = nxmutex_lock(&dev->devlock);
-  if (err < 0)
-    {
-      return err;
-    }
+static int drdy_int_handler(int irq, FAR void *context, FAR void *arg)
+{
+  FAR struct lsm6dsl_dev_s *dev = (FAR struct lsm6dsl_dev_s *)arg;
 
-  err = lsm6dsl_read_accel(dev, &data);
-  if (err < 0)
-    {
-      goto early_ret;
-    }
-
-  dev->accel.lower.push_event(dev->accel.lower.priv, &data, sizeof(data));
-
-early_ret:
-  nxmutex_unlock(&dev->devlock);
-  return err;
+  DEBUGASSERT(dev != NULL);
+  work_queue(HPWORK, &dev->work, drdy_worker, dev, 0);
+  return OK;
 }
 
 /****************************************************************************
- * Name: gyro_worker / accel_worker (interrupt work queue handlers)
+ * Private Functions — Polling thread
  ****************************************************************************/
 
-static void gyro_worker(FAR void *arg)
-{
-  push_gyro(arg);
-}
-
-static void accel_worker(FAR void *arg)
-{
-  push_accel(arg);
-}
-
-/****************************************************************************
- * Name: gyro_int_handler / accel_int_handler
- ****************************************************************************/
-
-static int gyro_int_handler(int irq, FAR void *context, FAR void *arg)
-{
-  FAR struct lsm6dsl_dev_s *dev = (FAR struct lsm6dsl_dev_s *)(arg);
-  int err;
-
-  DEBUGASSERT(arg != NULL);
-
-  err = work_queue(HPWORK, &dev->gyro.work, &gyro_worker, dev, 0);
-  if (err < 0)
-    {
-      snerr("Could not queue LSM6DSL gyro work: %d\n", err);
-    }
-
-  return err;
-}
-
-static int accel_int_handler(int irq, FAR void *context, FAR void *arg)
-{
-  FAR struct lsm6dsl_dev_s *dev = (FAR struct lsm6dsl_dev_s *)(arg);
-  int err;
-
-  DEBUGASSERT(arg != NULL);
-
-  err = work_queue(HPWORK, &dev->accel.work, &accel_worker, dev, 0);
-  if (err < 0)
-    {
-      snerr("Could not queue LSM6DSL accel work: %d\n", err);
-    }
-
-  return err;
-}
-
-/****************************************************************************
- * Name: gyro_thread / accel_thread (polling kthreads)
- ****************************************************************************/
-
-static int gyro_thread(int argc, char **argv)
+static int poll_thread(int argc, char **argv)
 {
   FAR struct lsm6dsl_dev_s *dev =
       (FAR struct lsm6dsl_dev_s *)((uintptr_t)strtoul(argv[1], NULL, 16));
-  int err = 0;
 
   while (true)
     {
-      if (!dev->gyro.enabled)
+      if (!dev->gyro_enabled && !dev->accel_enabled)
         {
-          err = nxsem_wait(&dev->gyro.run);
-          if (err < 0)
-            {
-              continue;
-            }
-        }
-
-      err = push_gyro(dev);
-      if (err < 0)
-        {
+          nxsem_wait(&dev->run);
           continue;
         }
 
-      nxsched_usleep(g_odr_interval[dev->gyro.odr]);
+      push_data(dev);
+      nxsched_usleep(g_odr_interval[dev->odr]);
     }
 
-  return err;
-}
-
-static int accel_thread(int argc, char **argv)
-{
-  FAR struct lsm6dsl_dev_s *dev =
-      (FAR struct lsm6dsl_dev_s *)((uintptr_t)strtoul(argv[1], NULL, 16));
-  int err = 0;
-
-  while (true)
-    {
-      if (!dev->accel.enabled)
-        {
-          err = nxsem_wait(&dev->accel.run);
-          if (err < 0)
-            {
-              continue;
-            }
-        }
-
-      err = push_accel(dev);
-      if (err < 0)
-        {
-          continue;
-        }
-
-      nxsched_usleep(g_odr_interval[dev->accel.odr]);
-    }
-
-  return err;
+  return OK;
 }
 
 /****************************************************************************
- * Name: lsm6dsl_activate
+ * Private Functions — sensor_ops
  ****************************************************************************/
 
 static int lsm6dsl_activate(FAR struct sensor_lowerhalf_s *lower,
                              FAR struct file *filep, bool enable)
 {
-  FAR struct lsm6dsl_sens_s *sens =
-      container_of(lower, FAR struct lsm6dsl_sens_s, lower);
-  FAR struct lsm6dsl_dev_s *dev = sens->dev;
-  bool start_thread = false;
+  FAR struct lsm6dsl_dev_s *dev;
+  bool was_active;
+  bool now_active;
   int err;
+
+  if (lower->type == SENSOR_TYPE_GYROSCOPE)
+    {
+      dev = container_of(lower, struct lsm6dsl_dev_s, gyro_lower);
+    }
+  else
+    {
+      dev = container_of(lower, struct lsm6dsl_dev_s, accel_lower);
+    }
 
   err = nxmutex_lock(&dev->devlock);
   if (err < 0)
@@ -682,67 +431,62 @@ static int lsm6dsl_activate(FAR struct sensor_lowerhalf_s *lower,
       return err;
     }
 
-  if (enable && !sens->enabled)
+  was_active = dev->gyro_enabled || dev->accel_enabled;
+
+  if (lower->type == SENSOR_TYPE_GYROSCOPE)
     {
-      start_thread = true;
+      dev->gyro_enabled = enable;
+    }
+  else
+    {
+      dev->accel_enabled = enable;
+    }
 
-      if (lower->type == SENSOR_TYPE_GYROSCOPE)
-        {
-          err = gyro_set_odr(dev, ODR_12_5HZ);
-        }
-      else
-        {
-          err = accel_set_odr(dev, ODR_12_5HZ);
-        }
+  now_active = dev->gyro_enabled || dev->accel_enabled;
 
+  /* Start sampling when first sensor activates */
+
+  if (!was_active && now_active)
+    {
+      err = lsm6dsl_set_odr(dev, ODR_12_5HZ);
       if (err < 0)
         {
-          goto early_ret;
+          goto unlock;
         }
+
+      /* Wake polling thread if present */
+
+      nxsem_post(&dev->run);
     }
 
-  if (!enable && sens->enabled)
+  /* Stop sampling when last sensor deactivates */
+
+  if (was_active && !now_active)
     {
-      if (lower->type == SENSOR_TYPE_GYROSCOPE)
-        {
-          err = gyro_set_odr(dev, ODR_OFF);
-        }
-      else
-        {
-          err = accel_set_odr(dev, ODR_OFF);
-        }
-
-      if (err < 0)
-        {
-          goto early_ret;
-        }
+      err = lsm6dsl_set_odr(dev, ODR_OFF);
     }
 
-  sens->enabled = enable;
-
-  if (start_thread)
-    {
-      err = nxsem_post(&sens->run);
-    }
-
-early_ret:
+unlock:
   nxmutex_unlock(&dev->devlock);
   return err;
 }
-
-/****************************************************************************
- * Name: lsm6dsl_set_interval
- ****************************************************************************/
 
 static int lsm6dsl_set_interval(FAR struct sensor_lowerhalf_s *lower,
                                  FAR struct file *filep,
                                  FAR uint32_t *period_us)
 {
-  FAR struct lsm6dsl_sens_s *sens =
-      container_of(lower, FAR struct lsm6dsl_sens_s, lower);
-  FAR struct lsm6dsl_dev_s *dev = sens->dev;
-  int err;
+  FAR struct lsm6dsl_dev_s *dev;
   enum lsm6dsl_odr_e odr;
+  int err;
+
+  if (lower->type == SENSOR_TYPE_GYROSCOPE)
+    {
+      dev = container_of(lower, struct lsm6dsl_dev_s, gyro_lower);
+    }
+  else
+    {
+      dev = container_of(lower, struct lsm6dsl_dev_s, accel_lower);
+    }
 
   if (*period_us >= 80000)
     {
@@ -791,15 +535,9 @@ static int lsm6dsl_set_interval(FAR struct sensor_lowerhalf_s *lower,
       return err;
     }
 
-  if (lower->type == SENSOR_TYPE_ACCELEROMETER)
-    {
-      err = accel_set_odr(dev, odr);
-    }
-  else
-    {
-      err = gyro_set_odr(dev, odr);
-    }
+  /* Both accel and gyro share the same ODR */
 
+  err = lsm6dsl_set_odr(dev, odr);
   if (err >= 0)
     {
       *period_us = g_odr_interval[odr];
@@ -809,53 +547,57 @@ static int lsm6dsl_set_interval(FAR struct sensor_lowerhalf_s *lower,
   return err;
 }
 
-/****************************************************************************
- * Name: lsm6dsl_get_info
- ****************************************************************************/
-
 static int lsm6dsl_get_info(FAR struct sensor_lowerhalf_s *lower,
                              FAR struct file *filep,
                              FAR struct sensor_device_info_s *info)
 {
-  FAR struct lsm6dsl_sens_s *sens =
-      container_of(lower, FAR struct lsm6dsl_sens_s, lower);
+  FAR struct lsm6dsl_dev_s *dev;
 
-  memset(info, 0, sizeof(struct sensor_device_info_s));
-  info->version = 0;
-  info->power   = 0.55f;  /* 0.55 mA in high performance */
+  if (lower->type == SENSOR_TYPE_GYROSCOPE)
+    {
+      dev = container_of(lower, struct lsm6dsl_dev_s, gyro_lower);
+    }
+  else
+    {
+      dev = container_of(lower, struct lsm6dsl_dev_s, accel_lower);
+    }
+
+  memset(info, 0, sizeof(*info));
+  info->power = 0.55f;
   memcpy(info->name, "LSM6DSL", sizeof("LSM6DSL"));
   memcpy(info->vendor, "STMicro", sizeof("STMicro"));
 
   if (lower->type == SENSOR_TYPE_GYROSCOPE)
     {
-      info->resolution = g_fsr_gy_sens[sens->fsr];
-      info->max_range  = g_fsr_gy_sens[sens->fsr] * INT16_MAX;
-      info->min_delay  = (int32_t)g_odr_interval[ODR_6660HZ];
-      info->max_delay  = (int32_t)g_odr_interval[ODR_12_5HZ];
+      info->resolution = g_fsr_gy_sens[dev->fsr_gy];
+      info->max_range  = g_fsr_gy_sens[dev->fsr_gy] * INT16_MAX;
     }
   else
     {
-      info->resolution = g_fsr_xl_sens[sens->fsr];
-      info->max_range  = g_fsr_xl_sens[sens->fsr] * INT16_MAX;
-      info->min_delay  = (int32_t)g_odr_interval[ODR_6660HZ];
-      info->max_delay  = (int32_t)g_odr_interval[ODR_12_5HZ];
+      info->resolution = g_fsr_xl_sens[dev->fsr_xl];
+      info->max_range  = g_fsr_xl_sens[dev->fsr_xl] * INT16_MAX;
     }
 
-  return 0;
+  info->min_delay = (int32_t)g_odr_interval[ODR_6660HZ];
+  info->max_delay = (int32_t)g_odr_interval[ODR_12_5HZ];
+  return OK;
 }
-
-/****************************************************************************
- * Name: lsm6dsl_control
- ****************************************************************************/
 
 static int lsm6dsl_control(FAR struct sensor_lowerhalf_s *lower,
                             FAR struct file *filep, int cmd,
                             unsigned long arg)
 {
-  FAR struct lsm6dsl_sens_s *sens =
-      container_of(lower, FAR struct lsm6dsl_sens_s, lower);
-  FAR struct lsm6dsl_dev_s *dev = sens->dev;
+  FAR struct lsm6dsl_dev_s *dev;
   int err;
+
+  if (lower->type == SENSOR_TYPE_GYROSCOPE)
+    {
+      dev = container_of(lower, struct lsm6dsl_dev_s, gyro_lower);
+    }
+  else
+    {
+      dev = container_of(lower, struct lsm6dsl_dev_s, accel_lower);
+    }
 
   err = nxmutex_lock(&dev->devlock);
   if (err < 0)
@@ -874,7 +616,7 @@ static int lsm6dsl_control(FAR struct sensor_lowerhalf_s *lower,
             break;
           }
 
-        err = lsm6dsl_read_bytes(dev, WHO_AM_I, id, sizeof(uint8_t));
+        err = lsm6dsl_read_bytes(dev, WHO_AM_I, id, 1);
       }
       break;
 
@@ -884,45 +626,23 @@ static int lsm6dsl_control(FAR struct sensor_lowerhalf_s *lower,
           {
             switch (arg)
               {
-              case 2:
-                err = accel_set_fsr(dev, FSR_XL_2G);
-                break;
-              case 4:
-                err = accel_set_fsr(dev, FSR_XL_4G);
-                break;
-              case 8:
-                err = accel_set_fsr(dev, FSR_XL_8G);
-                break;
-              case 16:
-                err = accel_set_fsr(dev, FSR_XL_16G);
-                break;
-              default:
-                err = -EINVAL;
-                break;
+              case 2:  err = accel_set_fsr(dev, FSR_XL_2G);  break;
+              case 4:  err = accel_set_fsr(dev, FSR_XL_4G);  break;
+              case 8:  err = accel_set_fsr(dev, FSR_XL_8G);  break;
+              case 16: err = accel_set_fsr(dev, FSR_XL_16G); break;
+              default: err = -EINVAL;                         break;
               }
           }
         else
           {
             switch (arg)
               {
-              case 125:
-                err = gyro_set_fsr(dev, FSR_GY_125DPS);
-                break;
-              case 250:
-                err = gyro_set_fsr(dev, FSR_GY_250DPS);
-                break;
-              case 500:
-                err = gyro_set_fsr(dev, FSR_GY_500DPS);
-                break;
-              case 1000:
-                err = gyro_set_fsr(dev, FSR_GY_1000DPS);
-                break;
-              case 2000:
-                err = gyro_set_fsr(dev, FSR_GY_2000DPS);
-                break;
-              default:
-                err = -EINVAL;
-                break;
+              case 125:  err = gyro_set_fsr(dev, FSR_GY_125DPS);  break;
+              case 250:  err = gyro_set_fsr(dev, FSR_GY_250DPS);  break;
+              case 500:  err = gyro_set_fsr(dev, FSR_GY_500DPS);  break;
+              case 1000: err = gyro_set_fsr(dev, FSR_GY_1000DPS); break;
+              case 2000: err = gyro_set_fsr(dev, FSR_GY_2000DPS); break;
+              default:   err = -EINVAL;                            break;
               }
           }
       }
@@ -938,11 +658,50 @@ static int lsm6dsl_control(FAR struct sensor_lowerhalf_s *lower,
 }
 
 /****************************************************************************
- * Public Functions
+ * Private Functions — Hardware init
  ****************************************************************************/
 
+static int lsm6dsl_hw_init(FAR struct lsm6dsl_dev_s *dev)
+{
+  int err;
+
+  /* Enable BDU (prevent data tearing) and IF_INC (auto-increment) */
+
+  err = lsm6dsl_set_bits(dev, CTRL3_C, BIT_BDU | BIT_IF_INC, 0);
+  if (err < 0)
+    {
+      return err;
+    }
+
+  /* Enable rounding for gyro+accel burst reads */
+
+  err = lsm6dsl_set_bits(dev, CTRL5_C, ROUNDING_GY_XL, ROUNDING_GY_XL);
+  if (err < 0)
+    {
+      return err;
+    }
+
+  /* Set DRDY to pulsed mode (more reliable than latched) */
+
+  err = lsm6dsl_write_byte(dev, DRDY_PULSE_CFG, BIT_DRDY_PULSED);
+  if (err < 0)
+    {
+      return err;
+    }
+
+  /* Route gyro DRDY to INT1 */
+
+  err = lsm6dsl_write_byte(dev, INT1_CTRL, BIT_INT1_DRDY_G);
+  if (err < 0)
+    {
+      return err;
+    }
+
+  return OK;
+}
+
 /****************************************************************************
- * Name: lsm6dsl_register_uorb
+ * Public Functions
  ****************************************************************************/
 
 int lsm6dsl_register_uorb(FAR struct i2c_master_s *i2c, uint8_t addr,
@@ -953,42 +712,29 @@ int lsm6dsl_register_uorb(FAR struct i2c_master_s *i2c, uint8_t addr,
   int err;
   FAR char *argv[2];
   char arg1[32];
-  int gyro_pid;
 
   DEBUGASSERT(i2c != NULL);
-  DEBUGASSERT(addr == 0x6b || addr == 0x6a);
+  DEBUGASSERT(addr == 0x6a || addr == 0x6b);
 
 #if !defined(CONFIG_SCHED_HPWORK)
-  if (config->gy_attach != NULL || config->xl_attach != NULL)
+  if (config->attach != NULL)
     {
-      snerr("CONFIG_SCHED_HPWORK required for interrupt driven mode.\n");
+      snerr("CONFIG_SCHED_HPWORK required for interrupt mode.\n");
       return -ENOSYS;
     }
 #endif
 
-  if (config->gy_attach != NULL && config->xl_attach != NULL &&
-      (config->gy_int == config->xl_int))
-    {
-      snerr("Cannot use the same interrupt pin for accel and gyro.\n");
-      return -EINVAL;
-    }
-
-  DEBUGASSERT(config->gy_int == LSM6DSL_INT1 ||
-              config->gy_int == LSM6DSL_INT2);
-  DEBUGASSERT(config->xl_int == LSM6DSL_INT1 ||
-              config->xl_int == LSM6DSL_INT2);
-
-  /* Allocate device */
-
   priv = kmm_zalloc(sizeof(struct lsm6dsl_dev_s));
   if (priv == NULL)
     {
-      snerr("ERROR: Failed to allocate LSM6DSL driver.\n");
       return -ENOMEM;
     }
 
   priv->i2c  = i2c;
   priv->addr = addr;
+  priv->odr  = ODR_OFF;
+  priv->fsr_gy = FSR_GY_250DPS;
+  priv->fsr_xl = FSR_XL_2G;
 
   err = nxmutex_init(&priv->devlock);
   if (err < 0)
@@ -996,157 +742,89 @@ int lsm6dsl_register_uorb(FAR struct i2c_master_s *i2c, uint8_t addr,
       goto free_mem;
     }
 
-  err = nxsem_init(&priv->gyro.run, 0, 0);
+  err = nxsem_init(&priv->run, 0, 0);
   if (err < 0)
     {
       goto del_mutex;
     }
 
-  err = nxsem_init(&priv->accel.run, 0, 0);
+  /* Hardware init: BDU, rounding, DRDY pulse, INT1 routing */
+
+  err = lsm6dsl_hw_init(priv);
   if (err < 0)
     {
-      goto del_gyro_sem;
+      snerr("ERROR: LSM6DSL hw init failed: %d\n", err);
+      goto del_sem;
     }
 
-  /* Register gyro lower half */
+  /* Register gyro */
 
-  priv->gyro.lower.type    = SENSOR_TYPE_GYROSCOPE;
-  priv->gyro.lower.ops     = &g_sensor_ops;
-  priv->gyro.lower.nbuffer = CONFIG_LSM6DSL_UORB_GYRO_BUFSIZE;
-  priv->gyro.enabled       = false;
-  priv->gyro.odr           = ODR_OFF;
-  priv->gyro.fsr           = FSR_GY_250DPS;
-  priv->gyro.interrupts    = false;
-  priv->gyro.intpin        = config->gy_int;
-  priv->gyro.dev           = priv;
+  priv->gyro_lower.type    = SENSOR_TYPE_GYROSCOPE;
+  priv->gyro_lower.ops     = &g_sensor_ops;
+  priv->gyro_lower.nbuffer = CONFIG_LSM6DSL_UORB_GYRO_BUFSIZE;
 
-  err = sensor_register(&priv->gyro.lower, devno);
+  err = sensor_register(&priv->gyro_lower, devno);
   if (err < 0)
     {
-      snerr("Failed to register LSM6DSL gyro: %d\n", err);
-      goto del_accel_sem;
+      snerr("ERROR: gyro register failed: %d\n", err);
+      goto del_sem;
     }
 
-  /* Register accel lower half */
+  /* Register accel */
 
-  priv->accel.lower.type    = SENSOR_TYPE_ACCELEROMETER;
-  priv->accel.lower.ops     = &g_sensor_ops;
-  priv->accel.lower.nbuffer = CONFIG_LSM6DSL_UORB_ACCEL_BUFSIZE;
-  priv->accel.enabled       = false;
-  priv->accel.odr           = ODR_OFF;
-  priv->accel.fsr           = FSR_XL_2G;
-  priv->accel.interrupts    = false;
-  priv->accel.intpin        = config->xl_int;
-  priv->accel.dev           = priv;
+  priv->accel_lower.type    = SENSOR_TYPE_ACCELEROMETER;
+  priv->accel_lower.ops     = &g_sensor_ops;
+  priv->accel_lower.nbuffer = CONFIG_LSM6DSL_UORB_ACCEL_BUFSIZE;
 
-  err = sensor_register(&priv->accel.lower, devno);
+  err = sensor_register(&priv->accel_lower, devno);
   if (err < 0)
     {
-      snerr("Failed to register LSM6DSL accel: %d\n", err);
+      snerr("ERROR: accel register failed: %d\n", err);
       goto unreg_gyro;
     }
 
-  /* Gyroscope data acquisition setup */
+  /* Data acquisition: interrupt or polling */
 
-  if (config->gy_attach != NULL)
+  if (config->attach != NULL)
     {
-      err = config->gy_attach(gyro_int_handler, priv);
+      err = config->attach(drdy_int_handler, priv);
       if (err < 0)
         {
-          snerr("Failed to attach gyro interrupt: %d\n", err);
+          snerr("ERROR: INT1 attach failed: %d\n", err);
           goto unreg_accel;
         }
 
-      err = gyro_int_enable(priv, true);
-      if (err < 0)
-        {
-          goto unreg_accel;
-        }
-
-      sninfo("LSM6DSL gyro using interrupt on %s.\n",
-             config->gy_int == LSM6DSL_INT1 ? "INT1" : "INT2");
+      sninfo("LSM6DSL using INT1 interrupt.\n");
     }
   else
     {
       snprintf(arg1, sizeof(arg1), "%p", priv);
       argv[0] = arg1;
       argv[1] = NULL;
-      err = kthread_create("lsm6dsl_gy", SCHED_PRIORITY_DEFAULT,
+      err = kthread_create("lsm6dsl", SCHED_PRIORITY_DEFAULT,
                            CONFIG_LSM6DSL_UORB_THREAD_STACKSIZE,
-                           gyro_thread, argv);
+                           poll_thread, argv);
       if (err < 0)
         {
-          snerr("Failed to create gyro thread: %d\n", err);
+          snerr("ERROR: poll thread create failed: %d\n", err);
           goto unreg_accel;
         }
 
-      gyro_pid = err;
-      sninfo("LSM6DSL gyro using polling thread.\n");
+      sninfo("LSM6DSL using polling thread.\n");
     }
 
-  /* Accelerometer data acquisition setup */
+  sninfo("LSM6DSL driver registered!\n");
+  return OK;
 
-  if (config->xl_attach != NULL)
-    {
-      err = config->xl_attach(accel_int_handler, priv);
-      if (err < 0)
-        {
-          snerr("Failed to attach accel interrupt: %d\n", err);
-          goto unreg_gyro_handler;
-        }
-
-      err = accel_int_enable(priv, true);
-      if (err < 0)
-        {
-          goto unreg_gyro_handler;
-        }
-
-      sninfo("LSM6DSL accel using interrupt on %s.\n",
-             config->xl_int == LSM6DSL_INT1 ? "INT1" : "INT2");
-    }
-  else
-    {
-      snprintf(arg1, sizeof(arg1), "%p", priv);
-      argv[0] = arg1;
-      argv[1] = NULL;
-      err = kthread_create("lsm6dsl_xl", SCHED_PRIORITY_DEFAULT,
-                           CONFIG_LSM6DSL_UORB_THREAD_STACKSIZE,
-                           accel_thread, argv);
-      if (err < 0)
-        {
-          snerr("Failed to create accel thread: %d\n", err);
-          goto unreg_gyro_handler;
-        }
-
-      sninfo("LSM6DSL accel using polling thread.\n");
-    }
-
-  if (err < 0)
-    {
-    unreg_gyro_handler:
-      if (config->xl_attach != NULL)
-        {
-          kthread_delete(gyro_pid);
-        }
-
-    unreg_accel:
-      sensor_unregister(&priv->accel.lower, devno);
-    unreg_gyro:
-      sensor_unregister(&priv->gyro.lower, devno);
-    del_accel_sem:
-      nxsem_destroy(&priv->accel.run);
-    del_gyro_sem:
-      nxsem_destroy(&priv->gyro.run);
-    del_mutex:
-      nxmutex_destroy(&priv->devlock);
-    free_mem:
-      kmm_free(priv);
-      snerr("ERROR: Failed to register LSM6DSL driver: %d\n", err);
-    }
-  else
-    {
-      sninfo("LSM6DSL driver registered!\n");
-    }
-
+unreg_accel:
+  sensor_unregister(&priv->accel_lower, devno);
+unreg_gyro:
+  sensor_unregister(&priv->gyro_lower, devno);
+del_sem:
+  nxsem_destroy(&priv->run);
+del_mutex:
+  nxmutex_destroy(&priv->devlock);
+free_mem:
+  kmm_free(priv);
   return err;
 }
