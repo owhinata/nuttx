@@ -178,6 +178,15 @@
 #    include "hardware/stm32f412xx_pinmap.h"
 #  endif
 
+/* STM32 F413 Family ********************************************************/
+
+#elif defined(CONFIG_STM32_STM32F413)
+#  if defined(CONFIG_STM32_USE_LEGACY_PINMAP)
+#    include "hardware/stm32f413xx_pinmap_legacy.h"
+#  else
+#    include "hardware/stm32f413xx_pinmap.h"
+#  endif
+
 /* STM32 F4 Family **********************************************************/
 
 #elif defined(CONFIG_STM32_STM32F4XXX)
