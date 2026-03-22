@@ -72,6 +72,7 @@
 #define ROUNDING_GY_XL  (3 << 2)  /* Rounding for gyro+accel in CTRL5_C */
 #define BIT_DRDY_PULSED (1 << 7)  /* Pulsed DRDY mode */
 #define BIT_INT1_DRDY_G (1 << 1)  /* Gyro DRDY on INT1 */
+#define BIT_SW_RESET    (1 << 0)  /* Software reset in CTRL3_C */
 
 /* Burst read: 6 bytes gyro (0x22-0x27) + 6 bytes accel (0x28-0x2D) */
 
@@ -448,7 +449,7 @@ static int lsm6dsl_activate(FAR struct sensor_lowerhalf_s *lower,
 
   if (!was_active && now_active)
     {
-      err = lsm6dsl_set_odr(dev, ODR_12_5HZ);
+      err = lsm6dsl_set_odr(dev, ODR_833HZ);
       if (err < 0)
         {
           goto unlock;
@@ -664,6 +665,28 @@ static int lsm6dsl_control(FAR struct sensor_lowerhalf_s *lower,
 static int lsm6dsl_hw_init(FAR struct lsm6dsl_dev_s *dev)
 {
   int err;
+  uint8_t val;
+
+  /* Software reset */
+
+  err = lsm6dsl_write_byte(dev, CTRL3_C, BIT_SW_RESET);
+  if (err < 0)
+    {
+      return err;
+    }
+
+  /* Wait for reset to complete */
+
+  do
+    {
+      nxsig_usleep(1000);
+      err = lsm6dsl_read_bytes(dev, CTRL3_C, &val, 1);
+      if (err < 0)
+        {
+          return err;
+        }
+    }
+  while (val & BIT_SW_RESET);
 
   /* Enable BDU (prevent data tearing) and IF_INC (auto-increment) */
 
@@ -684,6 +707,20 @@ static int lsm6dsl_hw_init(FAR struct lsm6dsl_dev_s *dev)
   /* Set DRDY to pulsed mode (more reliable than latched) */
 
   err = lsm6dsl_write_byte(dev, DRDY_PULSE_CFG, BIT_DRDY_PULSED);
+  if (err < 0)
+    {
+      return err;
+    }
+
+  /* Set FSR: accel ±8g, gyro 2000 dps (matching pybricks) */
+
+  err = accel_set_fsr(dev, FSR_XL_8G);
+  if (err < 0)
+    {
+      return err;
+    }
+
+  err = gyro_set_fsr(dev, FSR_GY_2000DPS);
   if (err < 0)
     {
       return err;
@@ -733,8 +770,8 @@ int lsm6dsl_register_uorb(FAR struct i2c_master_s *i2c, uint8_t addr,
   priv->i2c  = i2c;
   priv->addr = addr;
   priv->odr  = ODR_OFF;
-  priv->fsr_gy = FSR_GY_250DPS;
-  priv->fsr_xl = FSR_XL_2G;
+  priv->fsr_gy = FSR_GY_2000DPS;
+  priv->fsr_xl = FSR_XL_8G;
 
   err = nxmutex_init(&priv->devlock);
   if (err < 0)
