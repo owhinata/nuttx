@@ -36,24 +36,16 @@
  * Public Types
  ****************************************************************************/
 
-/* LSM6DSL interrupt pins */
-
-enum lsm6dsl_int_e
-{
-  LSM6DSL_INT1 = 0, /* Interrupt pin 1 */
-  LSM6DSL_INT2 = 1, /* Interrupt pin 2 */
-};
-
 typedef int (*lsm6dsl_attach_t)(xcpt_t handler, FAR void *arg);
 
-/* Configuration for the LSM6DSL uORB driver. */
+/* Configuration for the LSM6DSL uORB driver.
+ * A single INT1 pin is used for gyro DRDY; accel+gyro data are read
+ * together in one burst.  Set attach to NULL to use kthread polling.
+ */
 
 struct lsm6dsl_uorb_config_s
 {
-  enum lsm6dsl_int_e gy_int; /* Interrupt pin to use for gyro */
-  enum lsm6dsl_int_e xl_int; /* Interrupt pin to use for accel */
-  lsm6dsl_attach_t gy_attach; /* Attach gyro interrupt (NULL for kthread) */
-  lsm6dsl_attach_t xl_attach; /* Attach accel interrupt (NULL for kthread) */
+  lsm6dsl_attach_t attach;  /* INT1 GPIO attach (NULL for kthread) */
 };
 
 /****************************************************************************
@@ -74,7 +66,7 @@ struct lsm6dsl_uorb_config_s
  *   addr    - The I2C address of the LSM6DSL (0x6a or 0x6b).
  *   devno   - The device number for the uORB topics (sensor_accel<n>)
  *   config  - Configuration for interrupt-driven or polling data fetching.
- *             Leave *_attach function NULL to use kthread polling.
+ *             Leave attach NULL to use kthread polling.
  *
  * Returned Value:
  *   Zero (OK) on success; a negated errno value on failure.
