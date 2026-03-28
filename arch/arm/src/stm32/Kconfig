@@ -2838,7 +2838,7 @@ config STM32_BKP
 config STM32_BKPSRAM
 	bool "Enable BKP RAM Domain"
 	default n
-	depends on STM32_STM32F20XX || STM32_STM32F4XXX
+	depends on (STM32_STM32F20XX || STM32_STM32F4XXX) && !STM32_STM32F413
 
 config STM32_CAN1
 	bool "CAN1"
