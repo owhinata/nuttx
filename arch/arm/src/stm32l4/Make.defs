@@ -165,6 +165,10 @@ ifeq ($(CONFIG_STM32L4_QSPI),y)
 CHIP_CSRCS += stm32l4_qspi.c
 endif
 
+ifeq ($(CONFIG_STM32L4_OCTOSPI),y)
+CHIP_CSRCS += stm32l4_octospi.c
+endif
+
 ifeq ($(CONFIG_STM32L4_CAN),y)
 CHIP_CSRCS += stm32l4_can.c
 endif

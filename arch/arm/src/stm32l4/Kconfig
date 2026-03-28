@@ -1488,6 +1488,44 @@ config STM32L4_QSPI_REGDEBUG
 
 endif
 
+config STM32L4_OCTOSPI
+	bool "OctoSPI (L4+ only)"
+	default n
+	---help---
+		The STM32L4+ OCTOSPI block supports one or two serial NOR flash devices.
+		This driver is for STM32L4R/L4S series only.
+
+if STM32L4_OCTOSPI
+
+config STM32L4_QSPI_FLASH_SIZE
+	int "Size of attached serial flash, bytes"
+	default 8388608
+	range 1 2147483647
+
+config STM32L4_OCTOSPI_FIFO_THRESHOLD
+	int "FIFO threshold (bytes)"
+	default 4
+	range 1 32
+
+config STM32L4_OCTOSPI_CSHT
+	int "CS high time (AHB cycles)"
+	default 1
+	range 1 8
+
+choice
+	prompt "Transfer technique"
+	default STM32L4_OCTOSPI_POLLING
+
+config STM32L4_OCTOSPI_POLLING
+	bool "Polling"
+
+config STM32L4_OCTOSPI_INTERRUPTS
+	bool "Interrupts"
+
+endchoice
+
+endif
+
 comment "APB1 Peripherals"
 
 config STM32L4_PWR
