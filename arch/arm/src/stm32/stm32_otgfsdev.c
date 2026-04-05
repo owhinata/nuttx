@@ -3615,7 +3615,15 @@ static inline void stm32_isocoutinterrupt(struct stm32_usbdev_s *priv)
 #ifdef CONFIG_USBDEV_VBUSSENSING
 static inline void stm32_sessioninterrupt(struct stm32_usbdev_s *priv)
 {
-#warning "Missing logic"
+  /* Session request (VBUS rising edge) — clear soft disconnect to
+   * assert D+ pull-up so the host detects a new device attachment.
+   */
+
+  uint32_t regval;
+
+  regval  = stm32_getreg(STM32_OTGFS_DCTL);
+  regval &= ~OTGFS_DCTL_SDIS;
+  stm32_putreg(regval, STM32_OTGFS_DCTL);
 }
 #endif
 
@@ -3637,7 +3645,22 @@ static inline void stm32_otginterrupt(struct stm32_usbdev_s *priv)
   regval = stm32_getreg(STM32_OTGFS_GOTGINT);
   if ((regval & OTGFS_GOTGINT_SEDET) != 0)
     {
-#warning "Missing logic"
+      /* Session end detected (VBUS lost) — set soft disconnect to
+       * release D+ pull-up and notify the class driver.
+       */
+
+      uint32_t dctl;
+
+      dctl  = stm32_getreg(STM32_OTGFS_DCTL);
+      dctl |= OTGFS_DCTL_SDIS;
+      stm32_putreg(dctl, STM32_OTGFS_DCTL);
+
+      if (priv->driver)
+        {
+          CLASS_DISCONNECT(priv->driver, &priv->usbdev);
+        }
+
+      priv->devstate = DEVSTATE_DEFAULT;
     }
 
   /* Clear OTG interrupt */
@@ -5362,9 +5385,11 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
 
   /* Deactivate the power down */
 
-#if defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F469)
-  /* In the case of the STM32F446 or STM32F469 the meaning of the bit
-   * has changed to VBUS Detection Enable when set
+#if defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F469) || \
+    defined(CONFIG_STM32_STM32F412) || defined(CONFIG_STM32_STM32F413)
+  /* In the case of the STM32F446/F469/F412/F413 the GCCFG register layout
+   * differs from older F4 variants: bits 18-20 are BCD-related (DCDEN,
+   * PDEN, SDEN), not VBUS sensing.  VBUS detection uses VBDEN (bit 21).
    */
 
   regval  = OTGFS_GCCFG_PWRDWN;
@@ -5394,7 +5419,8 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
    * used we need to force the B session valid
    */
 
-#if defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F469)
+#if defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F469) || \
+    defined(CONFIG_STM32_STM32F412) || defined(CONFIG_STM32_STM32F413)
 #  ifndef CONFIG_USBDEV_VBUSSENSING
   regval  =  stm32_getreg(STM32_OTGFS_GOTGCTL);
   regval |= (OTGFS_GOTGCTL_BVALOEN | OTGFS_GOTGCTL_BVALOVAL);

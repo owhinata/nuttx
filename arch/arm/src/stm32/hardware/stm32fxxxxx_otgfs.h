@@ -376,7 +376,8 @@
 
 #define OTGFS_GOTGCTL_SRQSCS            (1 << 0)  /* Bit 0:  Session request success */
 #define OTGFS_GOTGCTL_SRQ               (1 << 1)  /* Bit 1:  Session request */
-#if defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F469)
+#if defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F469) || \
+    defined(CONFIG_STM32_STM32F412) || defined(CONFIG_STM32_STM32F413)
 #  define OTGFS_GOTGCTL_VBVALOEN        (1 << 2)  /* Bit 2:  VBUS valid override enable */
 #  define OTGFS_GOTGCTL_VBVALOVAL       (1 << 3)  /* Bit 3:  VBUS valid override value */
 #  define OTGFS_GOTGCTL_AVALOEN         (1 << 4)  /* Bit 4:  A-peripheral session valid override enable */
@@ -616,7 +617,8 @@
  */
 #define OTGFS_GCCFG_PWRDWN              (1 << 16) /* Bit 16: Power down */
                                                   /* Bit 17 Reserved, must be kept at reset value */
-#if defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F469)
+#if defined(CONFIG_STM32_STM32F446) || defined(CONFIG_STM32_STM32F469) || \
+    defined(CONFIG_STM32_STM32F412) || defined(CONFIG_STM32_STM32F413)
 #  define OTGFS_GCCFG_VBDEN             (1 << 21) /* Bit 21: USB VBUS detection enable */
 #else
 #  define OTGFS_GCCFG_VBUSASEN          (1 << 18) /* Bit 18: Enable the VBUS sensing A device */
