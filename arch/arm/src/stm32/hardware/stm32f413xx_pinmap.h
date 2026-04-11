@@ -93,6 +93,15 @@
 #define GPIO_CAN2_TX_2  (GPIO_ALT | GPIO_AF9 |  GPIO_PUSHPULL | GPIO_PORTB | GPIO_PIN6)
 #define GPIO_CAN2_TX_3  (GPIO_ALT | GPIO_AF9 |  GPIO_PUSHPULL | GPIO_PORTG | GPIO_PIN12)
 
+/* DAC - "Once the DAC channelx is enabled, the corresponding GPIO pin
+ * (PA4 or PA5) is automatically connected to the analog converter output
+ * (DAC_OUTx). In order to avoid parasitic consumption, the PA4 or PA5 pin
+ * should first be configured to analog (AIN)".
+ */
+
+#define GPIO_DAC1_OUT1_0  (GPIO_ANALOG | GPIO_PORTA | GPIO_PIN4)
+#define GPIO_DAC1_OUT2_0  (GPIO_ANALOG | GPIO_PORTA | GPIO_PIN5)
+
 /* Digital filter for sigma delta modulators */
 
 #define GPIO_DFSDM1_CKOUT_1  (GPIO_ALT | GPIO_AF6  |  GPIO_PUSHPULL | GPIO_PORTE | GPIO_PIN9)
