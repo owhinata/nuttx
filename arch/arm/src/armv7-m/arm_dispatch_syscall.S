@@ -78,6 +78,7 @@
 arm_dispatch_syscall:
 	.cfi_sections	.debug_frame
 	.cfi_startproc
+	push	{r11}                           /* save caller r11 (BUILD_PROTECTED fp) */
 	mov r11, sp
 	.cfi_register sp, r11
 	sub	sp, sp, #32
@@ -96,6 +97,7 @@ arm_dispatch_syscall:
 	blx	ip
 	ldr	lr, [sp, #12]
 	add	sp, sp, #32
+	pop	{r11}                           /* restore caller r11 before SVC return */
 	mov	r2, r0
 	mov	r0, SYS_syscall_return
 	svc	SYS_syscall
