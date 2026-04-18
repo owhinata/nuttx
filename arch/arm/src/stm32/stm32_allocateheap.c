@@ -674,14 +674,26 @@ void up_allocate_heap(void **heap_start, size_t *heap_size)
   DEBUGASSERT(ubase < (uintptr_t)SRAM1_END);
 
   /* Adjust that size to account for MPU alignment requirements.
-   * NOTE that there is an implicit assumption that the SRAM1_END
-   * is aligned to the MPU requirement.
+   * Round the base down to a multiple of the region size so that the
+   * MPU RBAR alignment rule (base aligned to size) is satisfied even
+   * when SRAM1_END itself is not a power-of-two boundary (e.g. STM32F413
+   * with 320 KB of SRAM where SRAM1_END = 0x20050000).  If that rounding
+   * would overlap the kernel heap (us_bssend + CONFIG_MM_KERNEL_HEAPSIZE),
+   * step down to the next smaller region size and retry.
    */
 
   log2  = (int)mpu_log2regionfloor(usize);
 
-  usize = (1 << log2);
-  ubase = SRAM1_END - usize;
+  for (; log2 >= 5; log2--)
+    {
+      usize = (1 << log2);
+      ubase = (SRAM1_END - usize) & ~(usize - 1);
+      if (ubase >= (uintptr_t)USERSPACE->us_bssend +
+                   CONFIG_MM_KERNEL_HEAPSIZE)
+        {
+          break;
+        }
+    }
 
   /* Return the user-space heap settings */
 
@@ -736,14 +748,22 @@ void up_allocate_kheap(void **heap_start, size_t *heap_size)
   DEBUGASSERT(ubase < (uintptr_t)SRAM1_END);
 
   /* Adjust that size to account for MPU alignment requirements.
-   * NOTE that there is an implicit assumption that the SRAM1_END
-   * is aligned to the MPU requirement.
+   * This computation must match up_allocate_heap() exactly so the kernel
+   * heap top meets the user heap bottom.
    */
 
   log2  = (int)mpu_log2regionfloor(usize);
 
-  usize = (1 << log2);
-  ubase = SRAM1_END - usize;
+  for (; log2 >= 5; log2--)
+    {
+      usize = (1 << log2);
+      ubase = (SRAM1_END - usize) & ~(usize - 1);
+      if (ubase >= (uintptr_t)USERSPACE->us_bssend +
+                   CONFIG_MM_KERNEL_HEAPSIZE)
+        {
+          break;
+        }
+    }
 
   /* Return the kernel heap settings (i.e., the part of the heap region
    * that was not dedicated to the user heap).
@@ -766,6 +786,49 @@ void up_allocate_kheap(void **heap_start, size_t *heap_size)
 #if CONFIG_MM_REGIONS > 1
 void arm_addregion(void)
 {
+#if defined(CONFIG_BUILD_PROTECTED) && defined(CONFIG_MM_KERNEL_HEAP)
+  /* When SRAM1_END is not a power-of-two boundary, up_allocate_heap()
+   * aligns the user heap base down, which can leave a tail region of
+   * SRAM1 unused.  Recompute the tail and, if its size is a valid MPU
+   * region size, expose it to the user heap as an additional region.
+   */
+
+  {
+    uintptr_t ubase = (uintptr_t)USERSPACE->us_bssend +
+      CONFIG_MM_KERNEL_HEAPSIZE;
+    size_t    usize = SRAM1_END - ubase;
+    int       log2  = (int)mpu_log2regionfloor(usize);
+
+    for (; log2 >= 5; log2--)
+      {
+        usize = (1 << log2);
+        ubase = (SRAM1_END - usize) & ~(usize - 1);
+        if (ubase >= (uintptr_t)USERSPACE->us_bssend +
+                     CONFIG_MM_KERNEL_HEAPSIZE)
+          {
+            break;
+          }
+      }
+
+    uintptr_t tail_start = ubase + usize;
+    size_t    tail_size  = SRAM1_END - tail_start;
+
+    if (tail_size != 0)
+      {
+        int tail_log2 = (int)mpu_log2regionfloor(tail_size);
+        size_t tail_usize = (1 << tail_log2);
+        uintptr_t tail_ubase = tail_start & ~(tail_usize - 1);
+
+        if (tail_ubase == tail_start)
+          {
+            stm32_mpu_uheap(tail_ubase, tail_usize);
+            up_heap_color((void *)tail_ubase, tail_usize);
+            kumm_addregion((void *)tail_ubase, tail_usize);
+          }
+      }
+  }
+#endif
+
 #ifndef CONFIG_STM32_CCMEXCLUDE
 #if defined(CONFIG_BUILD_PROTECTED) && defined(CONFIG_MM_KERNEL_HEAP)
 
