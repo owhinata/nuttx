@@ -81,7 +81,13 @@ arm_dispatch_syscall:
 	push	{r11}                           /* save caller r11 (BUILD_PROTECTED fp) */
 	mov r11, sp
 	.cfi_register sp, r11
-	sub	sp, sp, #32
+	sub	sp, sp, #36                     /* 32 used + 4 align pad: keeps SP
+	                                         8-byte aligned for AAPCS while
+	                                         the +4 from `push {r11}` would
+	                                         otherwise leave it 4-misaligned
+	                                         and break 8-byte va_arg in
+	                                         downstream variadic callees
+	                                         (spike-nx#59) */
 	str	r4, [sp, #0]
 	.cfi_offset r4, 0
 	str	r5, [sp, #4]
@@ -96,7 +102,7 @@ arm_dispatch_syscall:
 	ldr	ip, [ip, r0, lsl #2]
 	blx	ip
 	ldr	lr, [sp, #12]
-	add	sp, sp, #32
+	add	sp, sp, #36
 	pop	{r11}                           /* restore caller r11 before SVC return */
 	mov	r2, r0
 	mov	r0, SYS_syscall_return
