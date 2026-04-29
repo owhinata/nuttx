@@ -967,6 +967,47 @@ int up_timer_start(const struct timespec *ts)
   stm32_tickless_ackint(g_tickless.channel);
   stm32_tickless_enableint(g_tickless.channel);
 
+  /* Race-fix (spike-nx Issue #74): if execution between GETCOUNTER above
+   * and SETCOMPARE was delayed long enough for the counter to pass our
+   * target (e.g., a high-priority IRQ slipped in even though we are in
+   * a critical section, or the period was simply too short), the compare
+   * match has already been missed.  The next interrupt will not fire
+   * until the counter wraps a full cycle — 655.36ms on 16-bit TIM9 at
+   * USEC_PER_TICK=10 — blocking the entire HPWORK / scheduler tick.
+   *
+   * Detect the "late compare" case and re-arm the timer to a near-future
+   * value so the interrupt fires within a few ticks.  Bounded loop so a
+   * pathological storm of preemption can't hang the system.
+   */
+
+  for (int retry = 0; retry < 4; retry++)
+    {
+      uint32_t now = STM32_TIM_GETCOUNTER(g_tickless.tch);
+#ifdef HAVE_32BIT_TICKLESS
+      uint32_t elapsed = (uint32_t)(now - count);
+#else
+      uint16_t elapsed = (uint16_t)((uint16_t)now - (uint16_t)count);
+#endif
+      if ((uint64_t)elapsed < period)
+        {
+          /* Compare is still in the future — interrupt will fire on time. */
+          break;
+        }
+
+      /* Already late.  Set compare to current+2 (a few ticks of forward
+       * margin) and re-verify on the next iteration.
+       */
+#ifdef HAVE_32BIT_TICKLESS
+      g_tickless.period = (uint32_t)(now + 2);
+#else
+      g_tickless.period = (uint16_t)(now + 2);
+#endif
+      STM32_TIM_SETCOMPARE(g_tickless.tch, g_tickless.channel,
+                           g_tickless.period);
+      count  = now;
+      period = 2;
+    }
+
   g_tickless.pending = true;
   leave_critical_section(flags);
   return OK;
