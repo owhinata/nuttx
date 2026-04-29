@@ -994,18 +994,24 @@ int up_timer_start(const struct timespec *ts)
           break;
         }
 
-      /* Already late.  Set compare to current+2 (a few ticks of forward
-       * margin) and re-verify on the next iteration.
+      /* Already late.  Set compare to current+1 (one tick of forward
+       * margin) and re-verify on the next iteration.  One tick is
+       * sufficient because (a) GETCOUNTER → SETCOMPARE is sub-tick on
+       * Cortex-M4 @ 96 MHz (~0.05 tick), (b) SVCall (the only IRQ that
+       * can preempt this critical section at BASEPRI=0x80) completes in
+       * <= 0.5 tick on this build, and (c) the bounded 4-iteration retry
+       * gives further headroom if a rare edge case lands the counter
+       * exactly at the new compare value.
        */
 #ifdef HAVE_32BIT_TICKLESS
-      g_tickless.period = (uint32_t)(now + 2);
+      g_tickless.period = (uint32_t)(now + 1);
 #else
-      g_tickless.period = (uint16_t)(now + 2);
+      g_tickless.period = (uint16_t)(now + 1);
 #endif
       STM32_TIM_SETCOMPARE(g_tickless.tch, g_tickless.channel,
                            g_tickless.period);
       count  = now;
-      period = 2;
+      period = 1;
     }
 
   g_tickless.pending = true;
