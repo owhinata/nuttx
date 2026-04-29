@@ -142,13 +142,35 @@ static inline_function void wd_timer_cancel(void)
 #elif defined(CONFIG_SCHED_TICKLESS)
 static inline_function clock_t wd_adjust_next_tick(clock_t tick)
 {
+  clock_t now       = clock_systime_ticks();
   clock_t next_tick = tick;
 #ifdef CONFIG_SCHED_TICKLESS_LIMIT_MAX_SLEEP
-  clock_t interval  = clock_compare(g_wdexpired, tick) ?
-                      tick - g_wdexpired : 0u;
-  interval          = interval <= g_oneshot_maxticks ?
-                      interval : g_oneshot_maxticks;
-  next_tick         = g_wdexpired + interval;
+  clock_t base;
+  clock_t interval;
+
+  /* Pick the more recent of {g_wdexpired, now} as the chunk anchor.
+   *
+   * Anchoring strictly on g_wdexpired is unsafe when the kernel adds a
+   * scheduler/round-robin watchdog (g_sched_event with interval = 0)
+   * during a timer ISR: the next caller of wd_timer_start() inherits the
+   * stale g_wdexpired and computes next_tick = g_wdexpired + chunk, which
+   * may already be in the past relative to clock_systime_ticks().
+   * up_timer_tick_start(next_tick - now) then performs an unsigned
+   * subtraction underflow and the lower-half timer programs a wrong
+   * compare value — on a 16-bit timer the truncated value lands an
+   * arbitrary number of ticks past the counter, blocking the entire
+   * scheduler / HPWORK until the counter wraps (~655 ms on TIM9).
+   *
+   * Always taking max(g_wdexpired, now) keeps the chunk anchor
+   * monotonically forward.  See spike-nx Issue #75 for the
+   * reproduction and ringbuffer evidence.
+   */
+
+  base     = clock_compare(g_wdexpired, now) ? now : g_wdexpired;
+  interval = clock_compare(base, tick) ? tick - base : 0u;
+  interval = interval <= g_oneshot_maxticks ?
+             interval : g_oneshot_maxticks;
+  next_tick = base + interval;
 #endif
 
 #if CONFIG_TIMER_ADJUST_USEC > 0
@@ -166,6 +188,32 @@ static inline_function clock_t wd_adjust_next_tick(clock_t tick)
 
   next_tick -= CONFIG_TIMER_ADJUST_USEC / USEC_PER_TICK;
 #endif
+
+  /* Final guard: ensure next_tick is strictly in the future (at least
+   * one tick ahead of `now`) so the caller's
+   * `up_timer_tick_start(next_tick - clock_systime_ticks())` subtraction
+   * cannot underflow.  Without this clamp, a stale chunk anchor (e.g.,
+   * an interval=0 scheduler watchdog left in the active list) lets
+   * next_tick land at-or-behind `now`, wrapping the unsigned delta to a
+   * huge value (truncated-to-16-bit ≈ 467 ms on TIM9 and stalling
+   * HPWORK until the counter wraps).  See spike-nx Issue #75.
+   *
+   * Placed AFTER CONFIG_TIMER_ADJUST_USEC so that BCET adjustment
+   * cannot pull next_tick back into the past.
+   *
+   * One tick is sufficient: wd_adjust_next_tick is inlined into
+   * wd_timer_start, both clock_systime_ticks() reads happen back-to-back
+   * inside the same critical section (only SVCall can preempt at
+   * BASEPRI=0x80, and never inside wd_timer_start), so no full
+   * USEC_PER_TICK-sized advance can occur between the two reads.  If
+   * the second read does coincide (delta == 0), the lower-half retry
+   * loop catches it and re-arms with margin.
+   */
+
+  if ((sclock_t)(next_tick - now) < 1)
+    {
+      next_tick = now + 1;
+    }
 
   return next_tick;
 }
