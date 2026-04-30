@@ -494,7 +494,7 @@
 #define RCC_APB1ENR_PWREN           (1 << 28) /* Bit 28: Power interface clock enable */
 #define RCC_APB1ENR_DAC1EN          (1 << 29) /* Bit 29: DAC1 interface clock enable */
 #if defined(CONFIG_STM32_STM32F427) || defined(CONFIG_STM32_STM32F429) || \
-    defined(CONFIG_STM32_STM32F469)
+    defined(CONFIG_STM32_STM32F469) || defined(CONFIG_STM32_STM32F413)
 #  define RCC_APB1ENR_UART7EN       (1 << 30) /* Bit 30: UART7 clock enable */
 #  define RCC_APB1ENR_UART8EN       (1 << 31) /* Bit 31: UART8 clock enable */
 #endif
