@@ -78,7 +78,23 @@ void stm32_mpuinitialize(void)
   mpu_user_flash(USERSPACE->us_textstart,
                  USERSPACE->us_textend - USERSPACE->us_textstart);
 
+#if defined(CONFIG_BOARD_SPIKE_PRIME_HUB)
+  /* Issue #98: usram is statically 128 KB at 0x20020000..0x20040000.
+   * mpu_user_intsram() rounds the size up via mpu_log2regionceil(), so
+   * passing the actual .data/.bss span (~57 KB) yields a 64 KB MPU region
+   * that hides the upper half of usram from user mode.  That upper half
+   * is needed as the head of the user heap, so always cover the full
+   * 128 KB region (2^17, base 128 KB aligned, SRD=0).  The link-time
+   * ASSERTs in user-space.ld already guarantee that .data/.bss stay
+   * inside 0x20020000..0x20040000.
+   */
+
+  UNUSED(datastart);
+  UNUSED(dataend);
+  mpu_user_intsram(0x20020000, 0x20000);
+#else
   mpu_user_intsram(datastart, dataend - datastart);
+#endif
 
   /* Then enable the MPU */
 

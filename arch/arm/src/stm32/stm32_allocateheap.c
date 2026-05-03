@@ -81,6 +81,34 @@
 #  undef CONFIG_STM32_EXTERNAL_RAM
 #endif
 
+/* Issue #98: SPIKE Prime Hub static SRAM split.  See memory.ld for the full
+ * map.  Linker MEMORY layout (Issue #98 — usram doubled):
+ *
+ *   ksram        64 KB @ 0x20000000  kernel .data/.bss + idle stack
+ *   kernel heap  64 KB @ 0x20010000  runtime (NOT in MEMORY)
+ *   usram       128 KB @ 0x20020000  user .data/.bss + heap tail
+ *   xsram        64 KB @ 0x20040000  user heap top portion
+ *
+ * User heap (allocator view) is the contiguous range us_bssend..SRAM1_END.
+ * MPU exposes it via two regions: usram (128 KB @ 0x20020000) covers
+ * .data/.bss + heap tail; xsram top (64 KB @ 0x20040000) covers the upper
+ * portion.  Both regions are user RW so allocations spanning the
+ * 0x20040000 MPU boundary are transparent.
+ */
+
+#if defined(CONFIG_BOARD_SPIKE_PRIME_HUB)
+#  define SPIKE_KHEAP_BASE      0x20010000UL  /* kernel heap slot */
+#  define SPIKE_KHEAP_SIZE      0x10000UL     /* 64 KB */
+#  define SPIKE_USRAM_BASE      0x20020000UL  /* linker MEMORY usram */
+#  define SPIKE_USRAM_END       0x20040000UL  /* end of usram = 128 KB */
+#  define SPIKE_UHEAP_TOP_BASE  0x20040000UL  /* MPU region for xsram top */
+#  define SPIKE_UHEAP_TOP_SIZE  0x10000UL     /* 64 KB, 2^16 aligned */
+
+#  if CONFIG_MM_KERNEL_HEAPSIZE > SPIKE_KHEAP_SIZE
+#    error "spike-prime-hub: kernel heap slot is only 64 KB (0x10000)"
+#  endif
+#endif
+
 /* The STM32L15xxx family has only internal SRAM.  The heap is in one
  * contiguous block starting at g_idle_topstack and extending through
  * CONFIG_RAM_END.
@@ -661,53 +689,35 @@ static inline void up_heap_color(void *start, size_t size)
 void up_allocate_heap(void **heap_start, size_t *heap_size)
 {
 #if defined(CONFIG_BUILD_PROTECTED) && defined(CONFIG_MM_KERNEL_HEAP)
-  /* Get the unaligned size and position of the user-space heap.
-   * This heap begins after the user-space .bss section at an offset
-   * of CONFIG_MM_KERNEL_HEAPSIZE (subject to alignment).
+#  if !defined(CONFIG_BOARD_SPIKE_PRIME_HUB)
+#    error "spike-nx fork: only SPIKE Prime Hub PROTECTED build is supported"
+#  endif
+
+  /* Issue #98: user heap is the contiguous span us_bssend..SRAM1_END.
+   *   - usram (0x20020000..0x20040000) holds .data/.bss; the tail past
+   *     us_bssend is the head of the heap.  stm32_mpuinitialize() already
+   *     exposed the full 128 KB usram as a single MPU region.
+   *   - xsram top (0x20040000..0x20050000) needs its own 64 KB MPU region
+   *     so user mode can reach the upper half of the heap.
+   * Both regions are user RW, so allocations that span the 0x20040000
+   * boundary remain accessible.
    */
 
-  uintptr_t ubase = (uintptr_t)USERSPACE->us_bssend +
-    CONFIG_MM_KERNEL_HEAPSIZE;
-  size_t    usize = SRAM1_END - ubase;
-  int       log2;
+  uintptr_t ubase = (uintptr_t)USERSPACE->us_bssend;
 
-  DEBUGASSERT(ubase < (uintptr_t)SRAM1_END);
-
-  /* Adjust that size to account for MPU alignment requirements.
-   * Round the base down to a multiple of the region size so that the
-   * MPU RBAR alignment rule (base aligned to size) is satisfied even
-   * when SRAM1_END itself is not a power-of-two boundary (e.g. STM32F413
-   * with 320 KB of SRAM where SRAM1_END = 0x20050000).  If that rounding
-   * would overlap the kernel heap (us_bssend + CONFIG_MM_KERNEL_HEAPSIZE),
-   * step down to the next smaller region size and retry.
-   */
-
-  log2  = (int)mpu_log2regionfloor(usize);
-
-  for (; log2 >= 5; log2--)
-    {
-      usize = (1 << log2);
-      ubase = (SRAM1_END - usize) & ~(usize - 1);
-      if (ubase >= (uintptr_t)USERSPACE->us_bssend +
-                   CONFIG_MM_KERNEL_HEAPSIZE)
-        {
-          break;
-        }
-    }
-
-  /* Return the user-space heap settings */
+  DEBUGASSERT(ubase >= SPIKE_USRAM_BASE);
+  DEBUGASSERT(ubase <= SPIKE_USRAM_END);
+  DEBUGASSERT(SRAM1_END == 0x20050000UL);
 
   board_autoled_on(LED_HEAPALLOCATE);
   *heap_start = (void *)ubase;
-  *heap_size  = usize;
+  *heap_size  = SRAM1_END - ubase;
 
-  /* Colorize the heap for debug */
+  up_heap_color(*heap_start, *heap_size);
 
-  up_heap_color((void *)ubase, usize);
+  /* Expose the xsram top (the part of the heap above usram) to user mode. */
 
-  /* Allow user-mode access to the user heap memory */
-
-  stm32_mpu_uheap((uintptr_t)ubase, usize);
+  stm32_mpu_uheap(SPIKE_UHEAP_TOP_BASE, SPIKE_UHEAP_TOP_SIZE);
 #else
 
   /* Return the heap settings */
@@ -735,42 +745,22 @@ void up_allocate_heap(void **heap_start, size_t *heap_size)
 #if defined(CONFIG_BUILD_PROTECTED) && defined(CONFIG_MM_KERNEL_HEAP)
 void up_allocate_kheap(void **heap_start, size_t *heap_size)
 {
-  /* Get the unaligned size and position of the user-space heap.
-   * This heap begins after the user-space .bss section at an offset
-   * of CONFIG_MM_KERNEL_HEAPSIZE (subject to alignment).
+#  if !defined(CONFIG_BOARD_SPIKE_PRIME_HUB)
+#    error "spike-nx fork: only SPIKE Prime Hub PROTECTED build is supported"
+#  endif
+
+  /* Issue #98: kernel heap is the contiguous span
+   * g_idle_topstack..SPIKE_USRAM_BASE.  It includes the unused ksram tail
+   * above the idle thread stack plus the dedicated 64 KB slot at
+   * 0x20010000..0x20020000.  Physically separate from the user MPU
+   * regions so the protected boundary is clean: user mode only sees usram
+   * (0x20020000..0x20040000) and xsram top (0x20040000..0x20050000),
+   * never kernel memory.
    */
 
-  uintptr_t ubase = (uintptr_t)USERSPACE->us_bssend +
-    CONFIG_MM_KERNEL_HEAPSIZE;
-  size_t    usize = SRAM1_END - ubase;
-  int       log2;
-
-  DEBUGASSERT(ubase < (uintptr_t)SRAM1_END);
-
-  /* Adjust that size to account for MPU alignment requirements.
-   * This computation must match up_allocate_heap() exactly so the kernel
-   * heap top meets the user heap bottom.
-   */
-
-  log2  = (int)mpu_log2regionfloor(usize);
-
-  for (; log2 >= 5; log2--)
-    {
-      usize = (1 << log2);
-      ubase = (SRAM1_END - usize) & ~(usize - 1);
-      if (ubase >= (uintptr_t)USERSPACE->us_bssend +
-                   CONFIG_MM_KERNEL_HEAPSIZE)
-        {
-          break;
-        }
-    }
-
-  /* Return the kernel heap settings (i.e., the part of the heap region
-   * that was not dedicated to the user heap).
-   */
-
-  *heap_start = (void *)USERSPACE->us_bssend;
-  *heap_size  = ubase - (uintptr_t)USERSPACE->us_bssend;
+  *heap_start = (void *)g_idle_topstack;
+  *heap_size  = SPIKE_USRAM_BASE - (uintptr_t)g_idle_topstack;
+  DEBUGASSERT(*heap_size >= SPIKE_KHEAP_SIZE);
 }
 #endif
 
@@ -786,49 +776,6 @@ void up_allocate_kheap(void **heap_start, size_t *heap_size)
 #if CONFIG_MM_REGIONS > 1
 void arm_addregion(void)
 {
-#if defined(CONFIG_BUILD_PROTECTED) && defined(CONFIG_MM_KERNEL_HEAP)
-  /* When SRAM1_END is not a power-of-two boundary, up_allocate_heap()
-   * aligns the user heap base down, which can leave a tail region of
-   * SRAM1 unused.  Recompute the tail and, if its size is a valid MPU
-   * region size, expose it to the user heap as an additional region.
-   */
-
-  {
-    uintptr_t ubase = (uintptr_t)USERSPACE->us_bssend +
-      CONFIG_MM_KERNEL_HEAPSIZE;
-    size_t    usize = SRAM1_END - ubase;
-    int       log2  = (int)mpu_log2regionfloor(usize);
-
-    for (; log2 >= 5; log2--)
-      {
-        usize = (1 << log2);
-        ubase = (SRAM1_END - usize) & ~(usize - 1);
-        if (ubase >= (uintptr_t)USERSPACE->us_bssend +
-                     CONFIG_MM_KERNEL_HEAPSIZE)
-          {
-            break;
-          }
-      }
-
-    uintptr_t tail_start = ubase + usize;
-    size_t    tail_size  = SRAM1_END - tail_start;
-
-    if (tail_size != 0)
-      {
-        int tail_log2 = (int)mpu_log2regionfloor(tail_size);
-        size_t tail_usize = (1 << tail_log2);
-        uintptr_t tail_ubase = tail_start & ~(tail_usize - 1);
-
-        if (tail_ubase == tail_start)
-          {
-            stm32_mpu_uheap(tail_ubase, tail_usize);
-            up_heap_color((void *)tail_ubase, tail_usize);
-            kumm_addregion((void *)tail_ubase, tail_usize);
-          }
-      }
-  }
-#endif
-
 #ifndef CONFIG_STM32_CCMEXCLUDE
 #if defined(CONFIG_BUILD_PROTECTED) && defined(CONFIG_MM_KERNEL_HEAP)
 
