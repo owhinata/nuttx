@@ -756,10 +756,23 @@ void up_allocate_kheap(void **heap_start, size_t *heap_size)
    * regions so the protected boundary is clean: user mode only sees usram
    * (0x20020000..0x20040000) and xsram top (0x20040000..0x20050000),
    * never kernel memory.
+   *
+   * Issue #100: reserve the top 16448 bytes for two persist regions.
+   *   - 0x2001FFC0..0x20020000 (   64 B): breadcrumb struct (fixed-address
+   *                                       access from stm32_bcrumb.c)
+   *   - 0x2001BFC0..0x2001FFC0 (16384 B): RAMLOG ring buffer (linker section
+   *                                       `.ksram_ramlog`, NOLOAD)
+   * Excluding both from the heap allocator keeps malloc/free off them so
+   * the persistent contents survive every kernel-side soft-reset.
    */
 
+#  define SPIKE_BCRUMB_RESERVED   64u
+#  define SPIKE_RAMLOG_RESERVED   16384u
+#  define SPIKE_PERSIST_RESERVED  (SPIKE_BCRUMB_RESERVED + SPIKE_RAMLOG_RESERVED)
+
   *heap_start = (void *)g_idle_topstack;
-  *heap_size  = SPIKE_USRAM_BASE - (uintptr_t)g_idle_topstack;
+  *heap_size  = SPIKE_USRAM_BASE - (uintptr_t)g_idle_topstack
+                - SPIKE_PERSIST_RESERVED;
   DEBUGASSERT(*heap_size >= SPIKE_KHEAP_SIZE);
 }
 #endif
