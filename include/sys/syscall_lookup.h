@@ -179,6 +179,17 @@ SYSCALL_LOOKUP(clock_settime,              2)
   SYSCALL_LOOKUP(adjtime,                  2)
 #endif
 
+/* Hardware performance counter access (DWT CYCCNT etc.).  Without these
+ * proxies user-space callers in BUILD_PROTECTED cannot reach the perf
+ * helpers in sched/clock/clock_perf.c.  spike-nx#40.
+ */
+
+#ifdef CONFIG_ARCH_PERF_EVENTS
+  SYSCALL_LOOKUP(perf_convert,             2)
+  SYSCALL_LOOKUP(perf_getfreq,             0)
+  SYSCALL_LOOKUP(perf_gettime,             0)
+#endif
+
 /* The following are defined only if POSIX timers are supported */
 
 #ifndef CONFIG_DISABLE_POSIX_TIMERS
