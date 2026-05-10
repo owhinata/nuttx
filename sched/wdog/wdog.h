@@ -224,7 +224,51 @@ static inline_function void wd_timer_start(clock_t tick, bool in_expiration)
 #ifdef CONFIG_SCHED_TICKLESS_ALARM
   up_alarm_tick_start(next_tick);
 #else
-  up_timer_tick_start(next_tick - clock_systime_ticks());
+  /* spike-nx Issue #123: re-clamp the relative delta against the
+   * lower-half timer's representable range.
+   *
+   * wd_adjust_next_tick() above ran a clock_systime_ticks() read of its
+   * own and produced an absolute `next_tick` guaranteed to be at least
+   * one tick ahead of THAT `now`.  But this caller has to read the clock
+   * a SECOND time to convert `next_tick` back into a relative interval,
+   * and that opens a race window: anything that preempts between the
+   * two reads can advance the clock past `next_tick`, after which the
+   * unsigned subtraction underflows and up_timer_start() trips
+   * DEBUGASSERT(period <= UINT16_MAX) on a 16-bit lower-half timer.
+   *
+   * Inside a normal critical section this cannot happen, but on
+   * platforms that put some IRQs above BASEPRI (e.g., spike-nx case D
+   * LUMP UART direct vectors at NVIC priority 0x00) those vectors are
+   * NOT masked by enter_critical_section() and the underflow is
+   * reachable in practice.
+   *
+   * Recompute the delta with a fresh `now` and force it into
+   * [1, g_oneshot_maxticks] using clock_compare() so that a deadline
+   * which has already slipped into the past is reduced to a 1-tick
+   * re-arm (the lower-half retry loop catches the late compare), and
+   * an overshoot that exceeds the timer's representable range is
+   * clamped to the maximum so the assert never has a chance to fire.
+   */
+
+  clock_t now = clock_systime_ticks();
+  clock_t delta;
+
+  if (clock_compare(now, next_tick))
+    {
+      delta = next_tick - now;
+#ifdef CONFIG_SCHED_TICKLESS_LIMIT_MAX_SLEEP
+      if (delta > g_oneshot_maxticks)
+        {
+          delta = g_oneshot_maxticks;
+        }
+#endif
+    }
+  else
+    {
+      delta = 1u;
+    }
+
+  up_timer_tick_start(delta);
 #endif
 }
 
